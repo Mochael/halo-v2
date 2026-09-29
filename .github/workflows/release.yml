@@ -257,9 +257,32 @@ jobs:
               --substitutions="$substitutions"
           }
 
-          build_image "$transition_image" infra/controlplane.cloudbuild.yaml transition
-          build_image "$control_plane_image" infra/controlplane.cloudbuild.yaml frontend
-          build_image "$workspace_image" infra/cloudbuild.yaml
+          (
+            set -o pipefail
+            build_image "$transition_image" infra/controlplane.cloudbuild.yaml transition 2>&1 | sed -u 's/^/[transition] /'
+          ) &
+          transition_pid=$!
+          (
+            set -o pipefail
+            build_image "$control_plane_image" infra/controlplane.cloudbuild.yaml frontend 2>&1 | sed -u 's/^/[frontend] /'
+          ) &
+          frontend_pid=$!
+          (
+            set -o pipefail
+            build_image "$workspace_image" infra/cloudbuild.yaml 2>&1 | sed -u 's/^/[workspace] /'
+          ) &
+          workspace_pid=$!
+
+          build_failed=false
+          for pid in "$transition_pid" "$frontend_pid" "$workspace_pid"; do
+            if ! wait "$pid"; then
+              build_failed=true
+            fi
+          done
+          if [ "$build_failed" = true ]; then
+            echo "One or more release image builds failed"
+            exit 1
+          fi
           pin_image() {
             local digest
             digest="$(gcloud artifacts docker images describe "$1" --project="$PROJECT" --format='value(image_summary.digest)')"
