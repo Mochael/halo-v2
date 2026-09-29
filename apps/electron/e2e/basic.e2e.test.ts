@@ -1776,6 +1776,51 @@ e2eTest(
 );
 
 e2eTest(
+  "Markdown files edit task lists as saved checkboxes",
+  async ({ app }) => {
+    const path = "tasks.md";
+    await app.server.rpc.workspace.writeFile({
+      path,
+      content: "- [ ] Draft plan\n- [x] Share plan\n\nAfter",
+    });
+    await app.page.getByRole("link", { name: path, exact: true }).click();
+    const editor = app.page.getByTestId("file-page-content").locator(".tiptap");
+    const draft = editor.getByRole("checkbox", {
+      name: "Task item checkbox for Draft plan",
+    });
+    const share = editor.getByRole("checkbox", {
+      name: "Task item checkbox for Share plan",
+    });
+    await expect(draft).not.toBeChecked();
+    await expect(share).toBeChecked();
+
+    await draft.check();
+    await expect
+      .poll(async () => await app.server.rpc.workspace.readFile({ path }))
+      .toContain("- [x] Draft plan");
+    await app.page.reload();
+    await expect(draft).toBeChecked();
+    await share.uncheck();
+    await expect
+      .poll(async () => await app.server.rpc.workspace.readFile({ path }))
+      .toContain("- [ ] Share plan");
+
+    await editor.getByText("After", { exact: true }).click();
+    await app.page.keyboard.press("End");
+    await app.page.keyboard.press("Enter");
+    await app.page.keyboard.type("[ ] Review plan");
+    await expect(
+      editor.getByRole("checkbox", {
+        name: "Task item checkbox for Review plan",
+      }),
+    ).not.toBeChecked();
+    await expect
+      .poll(async () => await app.server.rpc.workspace.readFile({ path }))
+      .toContain("- [ ] Review plan");
+  },
+);
+
+e2eTest(
   "Tiptap keeps the caret during source typing and delimiter deletion",
   async ({ app }) => {
     const path = "caret.md";

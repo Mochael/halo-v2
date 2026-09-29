@@ -1,4 +1,5 @@
 import { EditorContent } from "@tiptap/react";
+import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { colors, flex } from "maui";
 import { style, useStyles } from "purse-styles";
@@ -30,6 +31,8 @@ export function MarkdownFileEditor({
   /* oxlint-disable react/refs -- The factory stores the ref; only later plugin event handlers read its client. */
   const extensions = useMemo(
     () => [
+      TaskList,
+      TaskItem.configure({ nested: true }),
       markdownImage({
         client: apiRef,
         documentPath: path,
@@ -141,6 +144,26 @@ const editorClass = style(flex({ direction: "column" }), {
     flex: "1 0 auto",
     outline: "none",
     minHeight: "2.75em",
+  },
+  '& .ProseMirror ul[data-type="taskList"]': {
+    paddingInlineStart: 0,
+  },
+  '& .ProseMirror ul[data-type="taskList"] > li': {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "0.5em",
+  },
+  '& .ProseMirror ul[data-type="taskList"] > li::before': {
+    content: "none",
+  },
+  '& .ProseMirror ul[data-type="taskList"] > li > label': {
+    cursor: "pointer",
+  },
+  '& .ProseMirror ul[data-type="taskList"] > li > label input': {
+    accentColor: colors.accent[9],
+  },
+  '& .ProseMirror ul[data-type="taskList"] > li > div': {
+    minWidth: 0,
   },
   "& .ProseMirror p.is-editor-empty:first-child::before": {
     color: colors.gray[9],
