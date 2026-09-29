@@ -35,14 +35,29 @@ e2eTest(
     await expect(plainHighlight).toBeVisible();
     await find.getByRole("button", { name: "Next match" }).click();
     await expect(find).toContainText("2 of 2");
+    const plainEditor = app.page.getByRole("textbox", { name: "plain.txt" });
+    await plainEditor.focus();
+    await plainEditor.evaluate((element: HTMLTextAreaElement) =>
+      element.setSelectionRange(14, 17),
+    );
+    await plainEditor.press("Backspace");
+    await plainEditor.pressSequentially("and");
+    await expect(plainEditor).toHaveValue("Silver marmot and silver marmot");
+    await expect
+      .poll(
+        async () =>
+          await plainEditor.evaluate(
+            (element: HTMLTextAreaElement) => element.selectionStart,
+          ),
+      )
+      .toBe(17);
+    await find.getByRole("textbox", { name: "Find in tab" }).focus();
     await app.page.keyboard.press("Escape");
     await expect(find).toBeHidden();
     await expect(plainHighlight).toHaveCount(0);
-    const plainEditor = app.page.getByRole("textbox", { name: "plain.txt" });
     await plainEditor.focus();
-    await plainEditor.press("ArrowRight");
     await plainEditor.pressSequentially("XY");
-    await expect(plainEditor).toHaveValue("Silver marmot and silver marmotXY");
+    await expect(plainEditor).toHaveValue("Silver marmot andXY silver marmot");
 
     await app.page.getByRole("link", { name: "notes.md" }).click();
     await app.page.keyboard.press("ControlOrMeta+f");
@@ -60,15 +75,39 @@ e2eTest(
       .locator(".halo-find-active-match");
     await expect(markdownHighlight).toHaveText("silver marmot");
     await expect(markdownHighlight).toBeVisible();
-    await find.getByRole("button", { name: "Close find" }).click();
+    const markdownEditor = app.page.locator(
+      '.ProseMirror[aria-label="notes.md"]',
+    );
+    await find.getByRole("textbox", { name: "Find in tab" }).focus();
+    await app.page.keyboard.press("Escape");
     await expect(markdownHighlight).toHaveCount(0);
-    await app.page.locator('.ProseMirror[aria-label="notes.md"]').focus();
+    await markdownEditor.focus();
     await expect
       .poll(
         async () =>
           await app.page.evaluate(() => window.getSelection()?.toString()),
       )
       .toBe("silver marmot");
+
+    await app.page.keyboard.press("ControlOrMeta+f");
+    await expect(find).toContainText("2 of 2");
+    const paragraph = markdownEditor.locator("p").first();
+    await markdownEditor.focus();
+    await paragraph.evaluate((element) => {
+      const text = element.firstChild;
+      if (text === null) return;
+      const range = document.createRange();
+      range.setStart(text, 0);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+    await app.page.keyboard.press("X");
+    await expect(paragraph).toContainText("XBefore");
+    await app.page.keyboard.press("Y");
+    await expect(paragraph).toContainText("XYBefore");
+    await expect(markdownHighlight).toHaveText("silver marmot");
 
     await app.page.getByRole("link", { name: "source.ts" }).click();
     await app.page.keyboard.press("ControlOrMeta+f");

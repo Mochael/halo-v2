@@ -66,7 +66,6 @@ export function TabFind({
   const [index, setIndex] = useState(0);
   const [target, setTarget] = useState<{ segmentId: string; offset: number }>();
   const input = useRef<HTMLInputElement>(null);
-  const wasOpen = useRef(false);
   const bar = useStyles(styles.bar);
   const field = useStyles(styles.field);
   const button = useStyles(styles.button);
@@ -124,14 +123,36 @@ export function TabFind({
     }, undefined)?.matchIndex;
   }, [matches, target]);
   const selectedIndex = targetIndex ?? index;
+  const hasSource = source !== undefined;
+  // Editing rebuilds the source; only Find navigation should move the caret.
+  const selectionIntent = useMemo(
+    () => ({ open, query, index, target, hasSource, path }),
+    [open, query, index, target, hasSource, path],
+  );
+  const previousSelectionIntent = useRef<typeof selectionIntent>(undefined);
+  const previousSource = useRef<FindSource>(undefined);
+  const editedSinceNavigation = useRef(false);
 
   useEffect(() => {
-    const justClosed = wasOpen.current && !open;
-    wasOpen.current = open;
+    const previous = previousSelectionIntent.current;
+    const selectionRequested = previous !== selectionIntent;
+    previousSelectionIntent.current = selectionIntent;
+    const sourceChanged =
+      previousSource.current !== undefined && source !== previousSource.current;
+    previousSource.current = source;
+    if (open) {
+      if (selectionRequested) editedSinceNavigation.current = false;
+      else if (sourceChanged) editedSinceNavigation.current = true;
+    }
     if (source === undefined) return;
     if (!open) {
       source.highlight?.(undefined);
-      if (justClosed && matches.length > 0) {
+      if (
+        selectionRequested &&
+        previous?.open === true &&
+        !editedSinceNavigation.current &&
+        matches.length > 0
+      ) {
         const match = matches[selectedIndex % matches.length]!;
         source.select(match.segmentId, match.start, match.end);
       }
@@ -143,9 +164,10 @@ export function TabFind({
     }
     const match = matches[selectedIndex % matches.length]!;
     source.highlight?.(match);
-    source.select(match.segmentId, match.start, match.end);
+    if (selectionRequested)
+      source.select(match.segmentId, match.start, match.end);
     return () => source.highlight?.(undefined);
-  }, [open, source, matches, selectedIndex]);
+  }, [open, source, matches, selectedIndex, selectionIntent]);
 
   return (
     <FindContext value={setSource}>
