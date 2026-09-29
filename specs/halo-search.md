@@ -12,11 +12,11 @@ Add literal, case-insensitive search in the active text file or conversation, an
 
 ## Current implementation
 
-Active-tab find is implemented for text, Markdown, code, and visible session messages. The workspace server RPC and global UI remain planned in the following stack layers.
+Active-tab find is implemented for text, Markdown, code, and visible session messages. The workspace server RPC, bounded file reads, and paged session search are implemented and covered by an integration test. The global UI remains planned in the next stack layer.
 
 ## Decisions
 
 - Search case-folds with JavaScript `toLocaleLowerCase` on both sides and treats the query as literal text.
-- Files follow the workspace navigator's hidden-directory and `node_modules` exclusions. PDF, Office, and binary media are omitted entirely. Oversized text files are counted as skipped.
-- Saved session entries are read in pages from the existing database connection. Only user display text and assistant `text` parts are searched; tool calls, tool results, thinking, and bash execution are excluded.
+- File and session scans run concurrently. Files follow the workspace navigator's hidden-directory and `node_modules` exclusions. Each listed path is validated again by `WorkspaceService` before search reads it, so a path replaced with a symlink is rejected; files deleted after listing are skipped. PDF, Office, and binary media are omitted entirely. Oversized text files are counted as skipped.
+- Saved session entries are read in pages from the existing database connection. Only user display text and assistant `text` parts are searched; tool calls, tool results, thinking, and bash execution are excluded. Explicit session names can produce title hits; an unnamed session's first prompt produces a content hit only.
 - Results and snippets are capped by the server to bound response size.
