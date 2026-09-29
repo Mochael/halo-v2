@@ -52,20 +52,26 @@ export function CodeViewFileEditor({
           id: path,
           range: { start: before.length, end: endBefore.length },
         });
-        if (editor?.getEditState() !== undefined)
-          editor.setSelections([
-            {
-              start: {
-                line: before.length - 1,
-                character: before.at(-1)?.length ?? 0,
-              },
-              end: {
-                line: endBefore.length - 1,
-                character: endBefore.at(-1)?.length ?? 0,
-              },
-              direction: "forward",
-            },
-          ]);
+        if (editor?.getEditState() !== undefined) {
+          const view = editor.getViewState().view;
+          if (view !== undefined)
+            editor.setViewState({
+              selections: [
+                {
+                  start: {
+                    line: before.length - 1,
+                    character: before.at(-1)?.length ?? 0,
+                  },
+                  end: {
+                    line: endBefore.length - 1,
+                    character: endBefore.at(-1)?.length ?? 0,
+                  },
+                  direction: 1,
+                },
+              ],
+              view,
+            });
+        }
         codeView.current?.scrollTo({
           type: "line",
           id: path,

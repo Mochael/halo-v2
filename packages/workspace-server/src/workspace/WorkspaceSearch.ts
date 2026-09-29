@@ -1,5 +1,6 @@
 import path from "node:path";
 import * as errore from "errore";
+import { marked, type Token, type Tokens } from "marked";
 import type {
   HaloEntry,
   WorkspaceSearchHit,
@@ -75,10 +76,67 @@ function occurrences(text: string, needle: string, limit: number) {
   return offsets;
 }
 
+function inlineMarkdownText(tokens: Token[]): string {
+  return tokens
+    .map((token) => {
+      if (token.type === "image" || token.type === "br") return "";
+      if ("tokens" in token && Array.isArray(token.tokens))
+        return inlineMarkdownText(token.tokens);
+      if (
+        token.type === "text" ||
+        token.type === "escape" ||
+        token.type === "codespan"
+      )
+        return token.text;
+      return "";
+    })
+    .join("");
+}
+
+function markdownTextblocks(tokens: Token[]): string[] {
+  return tokens.flatMap((token) => {
+    if (token.type === "list")
+      // SAFETY: Marked's built-in list tokens have typed list items; no extensions are registered.
+      return (token as Tokens.List).items.flatMap((item) =>
+        markdownTextblocks(item.tokens),
+      );
+    if (token.type === "blockquote")
+      return markdownTextblocks(token.tokens ?? []);
+    if (token.type === "code") return [token.text];
+    if (
+      token.type === "heading" ||
+      token.type === "paragraph" ||
+      token.type === "text"
+    )
+      return [inlineMarkdownText(token.tokens ?? [])];
+    return [];
+  });
+}
+
+function markdownMatches(content: string, needle: string) {
+  const blocks = markdownTextblocks(marked.lexer(content));
+  const text = blocks.join("\n");
+  const offsets: number[] = [];
+  let blockStart = 0;
+  for (const block of blocks) {
+    for (const offset of occurrences(block, needle, 3 - offsets.length))
+      offsets.push(blockStart + offset);
+    if (offsets.length === 3) break;
+    blockStart += block.length + 1;
+  }
+  return { text, offsets };
+}
+
 function snippet(text: string, start: number, length: number) {
-  const from = Math.max(0, start - 50);
-  const to = Math.min(text.length, start + length + 70);
-  return `${from > 0 ? "…" : ""}${text.slice(from, to).replace(/\s+/g, " ")}${to < text.length ? "…" : ""}`;
+  const from = Math.max(0, start - 100);
+  const to = Math.min(text.length, start + length + 140);
+  const before = `${from > 0 ? "…" : ""}${text.slice(from, start).replace(/\s+/g, " ")}`;
+  const match = text.slice(start, start + length).replace(/\s+/g, " ");
+  const after = `${text.slice(start + length, to).replace(/\s+/g, " ")}${to < text.length ? "…" : ""}`;
+  return {
+    snippet: `${before}${match}${after}`,
+    snippetMatch: { start: before.length, end: before.length + match.length },
+  };
 }
 
 function messageSegments(entry: HaloEntry) {
@@ -168,25 +226,34 @@ export class WorkspaceSearch {
         const content = file.content;
         const name = path.basename(filePath);
         const nameOffsets = occurrences(name, needle, 1);
-        const contentOffsets = occurrences(content, needle, 3);
+        const isMarkdown = /\.(?:md|markdown)$/i.test(filePath);
+        const searchable = isMarkdown
+          ? markdownMatches(content, needle)
+          : { text: content, offsets: occurrences(content, needle, 3) };
         const hits: WorkspaceSearchHit[] = [
-          ...nameOffsets.slice(0, 1).map(() => ({
+          ...nameOffsets.slice(0, 1).map((offset) => ({
             kind: "file" as const,
             path: filePath,
             title: filePath,
             snippet: filePath,
+            snippetMatch: {
+              start: filePath.length - name.length + offset,
+              end: filePath.length - name.length + offset + needle.length,
+            },
             source: "name" as const,
             matchIndex: 0,
           })),
-          ...contentOffsets.slice(0, 3).map((offset, matchIndex) => ({
+          ...searchable.offsets.map((offset, matchIndex) => ({
             kind: "file" as const,
             path: filePath,
             title: filePath,
-            snippet: snippet(content, offset, needle.length),
+            ...snippet(searchable.text, offset, needle.length),
             source: "content" as const,
             matchIndex,
-            segmentId: filePath,
-            offset,
+            ...(!isMarkdown && {
+              segmentId: filePath,
+              offset,
+            }),
           })),
         ];
         for (const hit of hits) {
@@ -230,14 +297,17 @@ export class WorkspaceSearch {
         session.name === null ? "" : decodeSessionJson<string>(session.name);
       let seq = 0;
       let matchIndex = 0;
-      const titleHit =
-        title.length > 0 && title.toLocaleLowerCase().includes(needle);
-      if (titleHit)
+      const titleOffset = title.toLocaleLowerCase().indexOf(needle);
+      if (titleOffset !== -1)
         hits.push({
           kind: "session",
           sessionId: session.id,
           title,
           snippet: title,
+          snippetMatch: {
+            start: titleOffset,
+            end: titleOffset + needle.length,
+          },
           source: "name",
           matchIndex: 0,
         });
@@ -280,7 +350,7 @@ export class WorkspaceSearch {
                 kind: "session",
                 sessionId: session.id,
                 title: title || "Session",
-                snippet: snippet(segment.text, offset, needle.length),
+                ...snippet(segment.text, offset, needle.length),
                 source: "content",
                 matchIndex: matchIndex++,
                 segmentId: segment.id,
