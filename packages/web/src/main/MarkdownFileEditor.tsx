@@ -99,7 +99,9 @@ export function MarkdownFileEditor({
         const range = locate(segmentId, start, end);
         if (range === undefined) return;
         editor.commands.setTextSelection(range);
-        editor.commands.scrollIntoView();
+        editor.view.dom
+          .querySelector(".halo-find-active-match")
+          ?.scrollIntoView({ block: "center", inline: "nearest" });
       },
       highlight: (
         match: { segmentId: string; start: number; end: number } | undefined,

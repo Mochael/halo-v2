@@ -40,14 +40,19 @@ serverTest(
     const result = await server.rpc.workspace.search({
       query: "SILVER MARMOT",
     });
+    const fileHit = result.hits.find(
+      (hit) =>
+        hit.kind === "file" &&
+        hit.path === "notes.txt" &&
+        hit.source === "content",
+    );
+    expect(fileHit).toBeDefined();
     expect(
-      result.hits.some(
-        (hit) =>
-          hit.kind === "file" &&
-          hit.path === "notes.txt" &&
-          hit.source === "content",
+      fileHit?.snippet.slice(
+        fileHit.snippetMatch.start,
+        fileHit.snippetMatch.end,
       ),
-    ).toBe(true);
+    ).toBe("silver marmot");
     expect(
       result.hits.filter(
         (hit) =>
@@ -78,6 +83,32 @@ serverTest(
     expect(
       (await server.rpc.workspace.search({ query: "absent phrase" })).hits,
     ).toEqual([]);
+  },
+);
+
+serverTest(
+  "searches visible Markdown text in document order",
+  async ({ server }) => {
+    await server.rpc.workspace.writeFile({
+      path: "notes.md",
+      content: "# foo\n\n[other](foo)\n\nfo**o**\n",
+    });
+
+    const result = await server.rpc.workspace.search({ query: "foo" });
+    const hits = result.hits.filter(
+      (hit) =>
+        hit.kind === "file" &&
+        hit.path === "notes.md" &&
+        hit.source === "content",
+    );
+    expect(hits.map((hit) => hit.matchIndex)).toEqual([0, 1]);
+    expect(
+      hits.map((hit) =>
+        hit.snippet.slice(hit.snippetMatch.start, hit.snippetMatch.end),
+      ),
+    ).toEqual(["foo", "foo"]);
+    expect(hits[1]?.snippet).toContain("other");
+    expect(hits[1]?.snippet).not.toContain("[other](foo)");
   },
 );
 
