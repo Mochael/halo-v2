@@ -66,6 +66,7 @@ export function TabFind({
   const [index, setIndex] = useState(0);
   const [target, setTarget] = useState<{ segmentId: string; offset: number }>();
   const input = useRef<HTMLInputElement>(null);
+  const wasOpen = useRef(false);
   const bar = useStyles(styles.bar);
   const field = useStyles(styles.field);
   const button = useStyles(styles.button);
@@ -125,10 +126,12 @@ export function TabFind({
   const selectedIndex = targetIndex ?? index;
 
   useEffect(() => {
+    const justClosed = wasOpen.current && !open;
+    wasOpen.current = open;
     if (source === undefined) return;
     if (!open) {
       source.highlight?.(undefined);
-      if (matches.length > 0) {
+      if (justClosed && matches.length > 0) {
         const match = matches[selectedIndex % matches.length]!;
         source.select(match.segmentId, match.start, match.end);
       }

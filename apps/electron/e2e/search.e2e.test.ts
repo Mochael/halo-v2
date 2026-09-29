@@ -38,6 +38,11 @@ e2eTest(
     await app.page.keyboard.press("Escape");
     await expect(find).toBeHidden();
     await expect(plainHighlight).toHaveCount(0);
+    const plainEditor = app.page.getByRole("textbox", { name: "plain.txt" });
+    await plainEditor.focus();
+    await plainEditor.press("ArrowRight");
+    await plainEditor.pressSequentially("XY");
+    await expect(plainEditor).toHaveValue("Silver marmot and silver marmotXY");
 
     await app.page.getByRole("link", { name: "notes.md" }).click();
     await app.page.keyboard.press("ControlOrMeta+f");
@@ -98,6 +103,30 @@ e2eTest(
     await expect(sessionFindInput).toBeFocused();
   },
 );
+
+e2eTest("opens the matching visible Markdown result", async ({ app }) => {
+  await app.server.rpc.workspace.writeFile({
+    path: "notes.md",
+    content: "# foo\n\n[other](foo)\n\nfoo\n",
+  });
+
+  await app.page.getByRole("link", { name: "notes.md" }).click();
+  await app.page.keyboard.press("ControlOrMeta+Shift+f");
+  const dialog = app.page.getByRole("dialog", { name: "Search workspace" });
+  await dialog.getByRole("textbox", { name: "Search workspace" }).fill("foo");
+  const hits = dialog
+    .getByRole("list", { name: "Search results" })
+    .getByRole("button")
+    .filter({ hasText: "notes.md" });
+  await expect(hits).toHaveCount(2);
+  await hits.nth(1).click();
+
+  const find = app.page.getByRole("search", { name: "Find in tab" });
+  await expect(find).toContainText("2 of 2");
+  const document = app.page.getByRole("main", { name: "notes.md" });
+  await expect(document.locator("p .halo-find-active-match")).toHaveText("foo");
+  await expect(document.locator("h1 .halo-find-active-match")).toHaveCount(0);
+});
 
 e2eTest(
   "searches saved files and sessions and opens a result",
