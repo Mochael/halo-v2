@@ -64,6 +64,7 @@ export function TabFind({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
+  const [target, setTarget] = useState<{ segmentId: string; offset: number }>();
   const input = useRef<HTMLInputElement>(null);
   const bar = useStyles(styles.bar);
   const field = useStyles(styles.field);
@@ -84,6 +85,8 @@ export function TabFind({
           query?: string;
           index?: number;
           path?: string;
+          segmentId?: string;
+          offset?: number;
         }>
       ).detail;
       if (
@@ -94,18 +97,39 @@ export function TabFind({
       setOpen(true);
       if (detail.query !== undefined) setQuery(detail.query);
       if (detail.index !== undefined) setIndex(detail.index);
+      setTarget(
+        detail.segmentId !== undefined && detail.offset !== undefined
+          ? { segmentId: detail.segmentId, offset: detail.offset }
+          : undefined,
+      );
       requestAnimationFrame(() => input.current?.focus());
     };
     window.addEventListener("halo:find", listener);
     return () => window.removeEventListener("halo:find", listener);
   }, [active, path]);
 
+  const targetIndex = useMemo(() => {
+    if (target === undefined) return undefined;
+    const candidates = matches
+      .map((match, matchIndex) => ({ match, matchIndex }))
+      .filter(({ match }) => match.segmentId === target.segmentId);
+    return candidates.reduce<
+      { matchIndex: number; distance: number } | undefined
+    >((best, candidate) => {
+      const distance = Math.abs(candidate.match.start - target.offset);
+      return best === undefined || distance < best.distance
+        ? { matchIndex: candidate.matchIndex, distance }
+        : best;
+    }, undefined)?.matchIndex;
+  }, [matches, target]);
+  const selectedIndex = targetIndex ?? index;
+
   useEffect(() => {
     if (source === undefined) return;
     if (!open) {
       source.highlight?.(undefined);
       if (matches.length > 0) {
-        const match = matches[index % matches.length]!;
+        const match = matches[selectedIndex % matches.length]!;
         source.select(match.segmentId, match.start, match.end);
       }
       return;
@@ -114,11 +138,11 @@ export function TabFind({
       source.highlight?.(undefined);
       return;
     }
-    const match = matches[index % matches.length]!;
+    const match = matches[selectedIndex % matches.length]!;
     source.highlight?.(match);
     source.select(match.segmentId, match.start, match.end);
     return () => source.highlight?.(undefined);
-  }, [open, source, matches, index]);
+  }, [open, source, matches, selectedIndex]);
 
   return (
     <FindContext value={setSource}>
@@ -137,10 +161,10 @@ export function TabFind({
             if (event.key === "Enter") {
               event.preventDefault();
               setIndex(
-                (current) =>
-                  (current + (event.shiftKey ? matches.length - 1 : 1)) %
+                (selectedIndex + (event.shiftKey ? matches.length - 1 : 1)) %
                   Math.max(matches.length, 1),
               );
+              setTarget(undefined);
             }
           }}
         >
@@ -153,23 +177,25 @@ export function TabFind({
             onChange={(event) => {
               setQuery(event.target.value);
               setIndex(0);
+              setTarget(undefined);
             }}
           />
           <span className={count} aria-live="polite">
             {matches.length === 0
               ? "0 results"
-              : `${(index % matches.length) + 1} of ${matches.length}`}
+              : `${(selectedIndex % matches.length) + 1} of ${matches.length}`}
           </span>
           <button
             className={button}
             type="button"
             aria-label="Previous match"
-            onClick={() =>
+            onClick={() => {
               setIndex(
-                (current) =>
-                  (current + matches.length - 1) % Math.max(matches.length, 1),
-              )
-            }
+                (selectedIndex + matches.length - 1) %
+                  Math.max(matches.length, 1),
+              );
+              setTarget(undefined);
+            }}
           >
             ↑
           </button>
@@ -177,9 +203,10 @@ export function TabFind({
             className={button}
             type="button"
             aria-label="Next match"
-            onClick={() =>
-              setIndex((current) => (current + 1) % Math.max(matches.length, 1))
-            }
+            onClick={() => {
+              setIndex((selectedIndex + 1) % Math.max(matches.length, 1));
+              setTarget(undefined);
+            }}
           >
             ↓
           </button>

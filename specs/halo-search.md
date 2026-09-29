@@ -12,7 +12,7 @@ Add literal, case-insensitive search in the active text file or conversation, an
 
 ## Current implementation
 
-Active-tab find is implemented for text, Markdown, code, and visible session messages. The workspace server RPC, bounded file reads, and paged session search are implemented and covered by an integration test. The global UI remains planned in the next stack layer.
+Active-tab find is implemented for text, Markdown, code, and visible session messages. Plain text and Markdown keep the active match visibly highlighted while the find input has focus; closing find restores the native selection. The workspace server RPC, bounded file reads, and paged session search are implemented and covered by an integration test. The global search panel is implemented with 300 ms debounce, stale-request cancellation, snippets, and hit navigation. The Electron E2E covers local and global search.
 
 ## Decisions
 
