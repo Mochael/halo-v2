@@ -171,6 +171,8 @@ jobs:
     outputs:
       frontend_image: ${{ steps.images.outputs.frontend_image }}
       workspace_image: ${{ steps.images.outputs.workspace_image }}
+      instances: ${{ steps.workspaces.outputs.instances }}
+      workspace_template: ${{ steps.workspaces.outputs.template }}
     permissions:
       contents: read
       id-token: write
@@ -257,9 +259,32 @@ jobs:
               --substitutions="$substitutions"
           }
 
-          build_image "$transition_image" infra/controlplane.cloudbuild.yaml transition
-          build_image "$control_plane_image" infra/controlplane.cloudbuild.yaml frontend
-          build_image "$workspace_image" infra/cloudbuild.yaml
+          (
+            set -o pipefail
+            build_image "$transition_image" infra/controlplane.cloudbuild.yaml transition 2>&1 | sed -u 's/^/[transition] /'
+          ) &
+          transition_pid=$!
+          (
+            set -o pipefail
+            build_image "$control_plane_image" infra/controlplane.cloudbuild.yaml frontend 2>&1 | sed -u 's/^/[frontend] /'
+          ) &
+          frontend_pid=$!
+          (
+            set -o pipefail
+            build_image "$workspace_image" infra/cloudbuild.yaml 2>&1 | sed -u 's/^/[workspace] /'
+          ) &
+          workspace_pid=$!
+
+          build_failed=false
+          for pid in "$transition_pid" "$frontend_pid" "$workspace_pid"; do
+            if ! wait "$pid"; then
+              build_failed=true
+            fi
+          done
+          if [ "$build_failed" = true ]; then
+            echo "One or more release image builds failed"
+            exit 1
+          fi
           pin_image() {
             local digest
             digest="$(gcloud artifacts docker images describe "$1" --project="$PROJECT" --format='value(image_summary.digest)')"
@@ -286,92 +311,126 @@ jobs:
           curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 "$origin/health"
           node apps/control-plane/scripts/verifyRelease.mjs "$origin" "releases/$VERSION.json" "$GITHUB_SHA"
 
-      - name: Recreate workspace VMs
-        env:
-          WORKSPACE_IMAGE: ${{ steps.images.outputs.workspace_image }}
+      - name: Discover workspace VMs
+        id: workspaces
         shell: bash
         run: |
           template="$(pnpm --silent --filter @get-halo/infra exec pulumi -C control-plane stack output workspaceInstanceTemplate --stack west)"
-          template_name="${template##*/}"
+          instances="$(gcloud compute instances list \
+            --project="$PROJECT" \
+            --zones="$ZONE" \
+            --filter='name~"^halo-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"' \
+            --format='json(name)' | jq -c 'map(.name)')"
+          if [ "$instances" = "[]" ]; then
+            echo "No production workspace VMs found; refusing to publish the desktop"
+            exit 1
+          fi
+          echo "template=$template" >> "$GITHUB_OUTPUT"
+          echo "instances=$instances" >> "$GITHUB_OUTPUT"
+
+  rollout-workspaces:
+    name: Recreate workspace VM ${{ matrix.instance }}
+    if: github.event_name == 'push'
+    needs: [prepare, deploy]
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        instance: ${{ fromJSON(needs.deploy.outputs.instances) }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT: halo-relay
+      VERSION: ${{ needs.prepare.outputs.version }}
+      ZONE: us-west2-a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Recreate and verify workspace VM
+        env:
+          INSTANCE: ${{ matrix.instance }}
+          TEMPLATE: ${{ needs.deploy.outputs.workspace_template }}
+          WORKSPACE_IMAGE: ${{ needs.deploy.outputs.workspace_image }}
+        shell: bash
+        run: |
+          template_name="${TEMPLATE##*/}"
           template_details="$(gcloud compute instance-templates describe "$template_name" \
             --project="$PROJECT" --format=json)"
           startup_script="$RUNNER_TEMP/workspace-startup.sh"
           jq -r '.properties.metadata.items[] | select(.key == "startup-script") | .value' \
             <<< "$template_details" > "$startup_script"
 
-          mapfile -t instances < <(gcloud compute instances list \
-            --project="$PROJECT" \
-            --zones="$ZONE" \
-            --filter='name~"^halo-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"' \
-            --format='value(name)')
-
-          if [ "${#instances[@]}" -eq 0 ]; then
-            echo "No production workspace VMs found; refusing to publish the desktop"
+          details="$(gcloud compute instances describe "$INSTANCE" \
+            --project="$PROJECT" --zone="$ZONE" --format=json)"
+          workspace_id="${INSTANCE#halo-}"
+          workspace_label="$(jq -r '.labels["halo-workspace-id"] // empty' <<< "$details")"
+          if [ -n "$workspace_label" ] && [ "$workspace_label" != "$workspace_id" ]; then
+            echo "$INSTANCE has workspace label $workspace_label; expected $workspace_id"
             exit 1
           fi
 
-          for instance in "${instances[@]}"; do
-            details="$(gcloud compute instances describe "$instance" \
-              --project="$PROJECT" --zone="$ZONE" --format=json)"
-            workspace_id="${instance#halo-}"
-            workspace_label="$(jq -r '.labels["halo-workspace-id"] // empty' <<< "$details")"
-            if [ -n "$workspace_label" ] && [ "$workspace_label" != "$workspace_id" ]; then
-              echo "$instance has workspace label $workspace_label; expected $workspace_id"
-              exit 1
+          owner_user_id="$(jq -r '.metadata.items[] | select(.key == "halo-owner-user-id") | .value' <<< "$details")"
+          if [ -z "$owner_user_id" ]; then
+            echo "$INSTANCE has no halo-owner-user-id metadata"
+            exit 1
+          fi
+
+          disk="$(jq -r '[.disks[] | select(.boot == false and .deviceName == "halo-workspace") | .source | split("/")[-1]] | if length == 1 then .[0] else empty end' <<< "$details")"
+          expected_disk="halo-$workspace_id-workspace"
+          if [ "$disk" != "$expected_disk" ]; then
+            echo "$INSTANCE has workspace disk $disk; expected $expected_disk"
+            exit 1
+          fi
+
+          metadata=("halo-owner-user-id=$owner_user_id" "halo-workspace-id=$workspace_id")
+          while IFS=$'\t' read -r key value; do
+            metadata+=("$key=$value")
+          done < <(jq -r '.properties.metadata.items[] | select(.key != "startup-script" and .key != "halo-owner-user-id" and .key != "halo-workspace-id") | [.key, .value] | @tsv' \
+            <<< "$template_details")
+          metadata_csv="$(IFS=,; echo "${metadata[*]}")"
+
+          gcloud compute instances delete "$INSTANCE" \
+            --project="$PROJECT" --zone="$ZONE" --keep-disks=data --quiet
+          gcloud compute instances create "$INSTANCE" \
+            --project="$PROJECT" \
+            --zone="$ZONE" \
+            --source-instance-template="$TEMPLATE" \
+            --labels="halo-workspace-id=$workspace_id" \
+            --metadata="$metadata_csv" \
+            --metadata-from-file="startup-script=$startup_script" \
+            --disk="name=$disk,device-name=halo-workspace,mode=rw,boot=no,auto-delete=no"
+
+          protocols="$(jq -c .protocols.workspace.supported "releases/$VERSION.json")"
+          ready_marker="HALO_WORKSPACE_READY image=$WORKSPACE_IMAGE protocols=$protocols revision=$GITHUB_SHA"
+          ready=false
+          for attempt in $(seq 1 120); do
+            if gcloud compute instances get-serial-port-output "$INSTANCE" \
+              --project="$PROJECT" --zone="$ZONE" --port=1 2>/dev/null | \
+              grep --fixed-strings --quiet "$ready_marker"; then
+              ready=true
+              break
             fi
-
-            owner_user_id="$(jq -r '.metadata.items[] | select(.key == "halo-owner-user-id") | .value' <<< "$details")"
-            if [ -z "$owner_user_id" ]; then
-              echo "$instance has no halo-owner-user-id metadata"
-              exit 1
-            fi
-
-            disk="$(jq -r '[.disks[] | select(.boot == false and .deviceName == "halo-workspace") | .source | split("/")[-1]] | if length == 1 then .[0] else empty end' <<< "$details")"
-            expected_disk="halo-$workspace_id-workspace"
-            if [ "$disk" != "$expected_disk" ]; then
-              echo "$instance has workspace disk $disk; expected $expected_disk"
-              exit 1
-            fi
-
-            metadata=("halo-owner-user-id=$owner_user_id" "halo-workspace-id=$workspace_id")
-            while IFS=$'\t' read -r key value; do
-              metadata+=("$key=$value")
-            done < <(jq -r '.properties.metadata.items[] | select(.key != "startup-script" and .key != "halo-owner-user-id" and .key != "halo-workspace-id") | [.key, .value] | @tsv' \
-              <<< "$template_details")
-            metadata_csv="$(IFS=,; echo "${metadata[*]}")"
-
-            gcloud compute instances delete "$instance" \
-              --project="$PROJECT" --zone="$ZONE" --keep-disks=data --quiet
-            gcloud compute instances create "$instance" \
-              --project="$PROJECT" \
-              --zone="$ZONE" \
-              --source-instance-template="$template" \
-              --labels="halo-workspace-id=$workspace_id" \
-              --metadata="$metadata_csv" \
-              --metadata-from-file="startup-script=$startup_script" \
-              --disk="name=$disk,device-name=halo-workspace,mode=rw,boot=no,auto-delete=no"
-
-            expected_image="$WORKSPACE_IMAGE"
-            protocols="$(jq -c .protocols.workspace.supported "releases/$VERSION.json")"
-            ready_marker="HALO_WORKSPACE_READY image=$expected_image protocols=$protocols revision=$GITHUB_SHA"
-            ready=false
-            for attempt in $(seq 1 120); do
-              if gcloud compute instances get-serial-port-output "$instance" \
-                --project="$PROJECT" --zone="$ZONE" --port=1 2>/dev/null | \
-                grep --fixed-strings --quiet "$ready_marker"; then
-                ready=true
-                break
-              fi
-              sleep 5
-            done
-
-            if [ "$ready" != "true" ]; then
-              echo "$instance did not report readiness for $expected_image"
-              gcloud compute instances get-serial-port-output "$instance" \
-                --project="$PROJECT" --zone="$ZONE" --port=1 | tail -n 200
-              exit 1
-            fi
+            sleep 5
           done
+
+          if [ "$ready" != "true" ]; then
+            echo "$INSTANCE did not report readiness for $WORKSPACE_IMAGE"
+            gcloud compute instances get-serial-port-output "$INSTANCE" \
+              --project="$PROJECT" --zone="$ZONE" --port=1 | tail -n 200
+            exit 1
+          fi
 
   test-e2e:
     name: Test release E2Es
@@ -544,7 +603,7 @@ jobs:
   promote-browser:
     name: Promote browser after backend readiness
     if: github.event_name == 'push'
-    needs: [prepare, deploy]
+    needs: [prepare, deploy, rollout-workspaces]
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
