@@ -4,12 +4,13 @@
   "minimumFrontendVersion": "0.1.53",
   "protocols": {
     "workspace": {
-      "client": 22,
+      "client": 23,
       "supported": [
         18,
         19,
         21,
-        22
+        22,
+        23
       ]
     },
     "controlPlane": {
