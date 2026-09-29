@@ -76,9 +76,15 @@ function occurrences(text: string, needle: string, limit: number) {
 }
 
 function snippet(text: string, start: number, length: number) {
-  const from = Math.max(0, start - 50);
-  const to = Math.min(text.length, start + length + 70);
-  return `${from > 0 ? "…" : ""}${text.slice(from, to).replace(/\s+/g, " ")}${to < text.length ? "…" : ""}`;
+  const from = Math.max(0, start - 100);
+  const to = Math.min(text.length, start + length + 140);
+  const before = `${from > 0 ? "…" : ""}${text.slice(from, start).replace(/\s+/g, " ")}`;
+  const match = text.slice(start, start + length).replace(/\s+/g, " ");
+  const after = `${text.slice(start + length, to).replace(/\s+/g, " ")}${to < text.length ? "…" : ""}`;
+  return {
+    snippet: `${before}${match}${after}`,
+    snippetMatch: { start: before.length, end: before.length + match.length },
+  };
 }
 
 function messageSegments(entry: HaloEntry) {
@@ -170,11 +176,15 @@ export class WorkspaceSearch {
         const nameOffsets = occurrences(name, needle, 1);
         const contentOffsets = occurrences(content, needle, 3);
         const hits: WorkspaceSearchHit[] = [
-          ...nameOffsets.slice(0, 1).map(() => ({
+          ...nameOffsets.slice(0, 1).map((offset) => ({
             kind: "file" as const,
             path: filePath,
             title: filePath,
             snippet: filePath,
+            snippetMatch: {
+              start: filePath.length - name.length + offset,
+              end: filePath.length - name.length + offset + needle.length,
+            },
             source: "name" as const,
             matchIndex: 0,
           })),
@@ -182,7 +192,7 @@ export class WorkspaceSearch {
             kind: "file" as const,
             path: filePath,
             title: filePath,
-            snippet: snippet(content, offset, needle.length),
+            ...snippet(content, offset, needle.length),
             source: "content" as const,
             matchIndex,
             segmentId: filePath,
@@ -230,14 +240,17 @@ export class WorkspaceSearch {
         session.name === null ? "" : decodeSessionJson<string>(session.name);
       let seq = 0;
       let matchIndex = 0;
-      const titleHit =
-        title.length > 0 && title.toLocaleLowerCase().includes(needle);
-      if (titleHit)
+      const titleOffset = title.toLocaleLowerCase().indexOf(needle);
+      if (titleOffset !== -1)
         hits.push({
           kind: "session",
           sessionId: session.id,
           title,
           snippet: title,
+          snippetMatch: {
+            start: titleOffset,
+            end: titleOffset + needle.length,
+          },
           source: "name",
           matchIndex: 0,
         });
@@ -280,7 +293,7 @@ export class WorkspaceSearch {
                 kind: "session",
                 sessionId: session.id,
                 title: title || "Session",
-                snippet: snippet(segment.text, offset, needle.length),
+                ...snippet(segment.text, offset, needle.length),
                 source: "content",
                 matchIndex: matchIndex++,
                 segmentId: segment.id,

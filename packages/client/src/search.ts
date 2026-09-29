@@ -4,6 +4,7 @@ export type WorkspaceSearchHit = {
   sessionId?: string;
   title: string;
   snippet: string;
+  snippetMatch: { start: number; end: number };
   source: "name" | "content";
   matchIndex: number;
   segmentId?: string;

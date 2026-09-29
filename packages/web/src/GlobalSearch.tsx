@@ -30,6 +30,7 @@ export function GlobalSearch() {
   const hitStyle = useStyles(styles.hit);
   const title = useStyles(styles.title);
   const snippet = useStyles(styles.snippet);
+  const match = useStyles(styles.match);
   const status = useStyles(styles.status);
 
   useEffect(() => {
@@ -158,7 +159,16 @@ export function GlobalSearch() {
                         : "Session"}{" "}
                     · {hit.title}
                   </span>
-                  <span className={snippet}>{hit.snippet}</span>
+                  <span className={snippet}>
+                    {hit.snippet.slice(0, hit.snippetMatch.start)}
+                    <mark className={match}>
+                      {hit.snippet.slice(
+                        hit.snippetMatch.start,
+                        hit.snippetMatch.end,
+                      )}
+                    </mark>
+                    {hit.snippet.slice(hit.snippetMatch.end)}
+                  </span>
                 </button>
               </li>
             ))}
@@ -229,10 +239,14 @@ const styles = {
   }),
   title: style(text({ size: "sm", fontWeight: 600, color: "highContrast" })),
   snippet: style(text({ size: "xs", color: "lowContrast" }), {
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
     maxWidth: "100%",
+    lineHeight: 1.5,
+    overflowWrap: "anywhere",
+  }),
+  match: style({
+    backgroundColor: colors.amber[5],
+    color: colors.gray[12],
+    borderRadius: 2,
   }),
   status: style(text({ size: "sm", color: "lowContrast" }), {
     margin: "10px 4px",

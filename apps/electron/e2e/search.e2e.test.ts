@@ -104,7 +104,8 @@ e2eTest(
   async ({ app, llm }) => {
     await app.server.rpc.workspace.writeFile({
       path: "notes.txt",
-      content: "A silver marmot waits here.",
+      content:
+        "A careful field report describes the wet creek and the trail along the ridge before a silver marmot waits here beside the cairn while hikers record the time and weather.",
     });
     const session = await app.server.rpc.sessions.create();
     const prompt = app.server.rpc.sessions.prompt({
@@ -125,7 +126,13 @@ e2eTest(
     const results = dialog.getByRole("list", { name: "Search results" });
     await expect(results).toContainText("notes.txt");
     await expect(results).toContainText("Find the silver marmot");
-    await results.getByRole("button").filter({ hasText: "notes.txt" }).click();
+    const fileHit = results
+      .getByRole("button")
+      .filter({ hasText: "notes.txt" });
+    await expect(fileHit).toContainText("trail along the ridge before a");
+    await expect(fileHit).toContainText("hikers record the time and weather");
+    await expect(fileHit.locator("mark")).toHaveText("silver marmot");
+    await fileHit.click();
     await expect(
       app.page.getByRole("main", { name: "notes.txt" }),
     ).toBeVisible();

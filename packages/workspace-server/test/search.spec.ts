@@ -40,14 +40,19 @@ serverTest(
     const result = await server.rpc.workspace.search({
       query: "SILVER MARMOT",
     });
+    const fileHit = result.hits.find(
+      (hit) =>
+        hit.kind === "file" &&
+        hit.path === "notes.txt" &&
+        hit.source === "content",
+    );
+    expect(fileHit).toBeDefined();
     expect(
-      result.hits.some(
-        (hit) =>
-          hit.kind === "file" &&
-          hit.path === "notes.txt" &&
-          hit.source === "content",
+      fileHit?.snippet.slice(
+        fileHit.snippetMatch.start,
+        fileHit.snippetMatch.end,
       ),
-    ).toBe(true);
+    ).toBe("silver marmot");
     expect(
       result.hits.filter(
         (hit) =>
