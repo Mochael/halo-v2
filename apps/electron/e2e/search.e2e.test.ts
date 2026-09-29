@@ -25,6 +25,9 @@ e2eTest(
       .getByRole("textbox", { name: "Find in tab" })
       .fill("SILVER MARMOT");
     await expect(find).toContainText("1 of 2");
+    await expect(
+      find.getByRole("textbox", { name: "Find in tab" }),
+    ).toBeFocused();
     const plainHighlight = app.page
       .getByRole("main", { name: "plain.txt" })
       .locator("mark");
@@ -42,6 +45,9 @@ e2eTest(
       .getByRole("textbox", { name: "Find in tab" })
       .fill("silver marmot");
     await expect(find).toContainText("1 of 2");
+    await expect(
+      find.getByRole("textbox", { name: "Find in tab" }),
+    ).toBeFocused();
     await find.getByRole("button", { name: "Next match" }).click();
     await expect(find).toContainText("2 of 2");
     const markdownHighlight = app.page
@@ -63,6 +69,9 @@ e2eTest(
     await app.page.keyboard.press("ControlOrMeta+f");
     await find.getByRole("textbox", { name: "Find in tab" }).fill("marmot");
     await expect(find).toContainText("1 of 2");
+    await expect(
+      find.getByRole("textbox", { name: "Find in tab" }),
+    ).toBeFocused();
     await app.page.keyboard.press("Escape");
 
     const session = await app.server.rpc.sessions.create();
@@ -76,10 +85,17 @@ e2eTest(
       .getByRole("link", { name: "The silver marmot is here" })
       .click();
     await app.page.keyboard.press("ControlOrMeta+f");
-    await find
-      .getByRole("textbox", { name: "Find in tab" })
-      .fill("silver marmot");
+    const sessionFindInput = find.getByRole("textbox", {
+      name: "Find in tab",
+    });
+    await sessionFindInput.fill("silver");
+    await expect(sessionFindInput).toBeFocused();
+    await sessionFindInput.pressSequentially(" marmot");
     await expect(find).toContainText("1 of 2");
+    await expect(sessionFindInput).toBeFocused();
+    await sessionFindInput.pressSequentially("s");
+    await expect(sessionFindInput).toHaveValue("silver marmots");
+    await expect(sessionFindInput).toBeFocused();
   },
 );
 
