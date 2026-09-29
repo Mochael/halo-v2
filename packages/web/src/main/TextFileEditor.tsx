@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { backgroundColor, colors, monoFontFamily, text } from "maui";
 import { style, useStyles } from "purse-styles";
 import { useAutosaveFile } from "./useAutosaveFile.js";
@@ -16,14 +16,20 @@ export function TextFileEditor({
     start: number;
     end: number;
   }>();
+  const [revealRequest, setRevealRequest] = useState<{
+    start: number;
+    end: number;
+  }>();
   const input = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
+  const activeMark = useRef<HTMLElement>(null);
+  const lastRevealed = useRef<typeof revealRequest>(undefined);
   const findSource = useMemo(
     () => ({
       segments: [{ id: path, text: content }],
       select: (_segmentId: string, start: number, end: number) => {
         input.current?.setSelectionRange(start, end);
-        input.current?.scrollIntoView({ block: "nearest" });
+        setRevealRequest({ start, end });
       },
       highlight: (match: { start: number; end: number } | undefined) => {
         setActiveMatch(
@@ -36,12 +42,35 @@ export function TextFileEditor({
     [path, content],
   );
   useTabFindSource(findSource);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (activeMatch === undefined) return;
-    if (mirror.current === null || input.current === null) return;
-    mirror.current.scrollTop = input.current.scrollTop;
-    mirror.current.scrollLeft = input.current.scrollLeft;
-  }, [activeMatch]);
+    const editor = input.current;
+    const overlay = mirror.current;
+    const mark = activeMark.current;
+    if (editor === null || overlay === null || mark === null) return;
+    overlay.scrollTop = editor.scrollTop;
+    overlay.scrollLeft = editor.scrollLeft;
+    if (
+      revealRequest === undefined ||
+      lastRevealed.current === revealRequest ||
+      activeMatch.start !== revealRequest.start ||
+      activeMatch.end !== revealRequest.end
+    )
+      return;
+    lastRevealed.current = revealRequest;
+    const viewport = overlay.getBoundingClientRect();
+    const match = mark.getBoundingClientRect();
+    if (match.top < viewport.top || match.bottom > viewport.bottom) {
+      editor.scrollTop +=
+        match.top - viewport.top - (viewport.height - match.height) / 2;
+      overlay.scrollTop = editor.scrollTop;
+    }
+    if (match.left < viewport.left || match.right > viewport.right) {
+      editor.scrollLeft +=
+        match.left - viewport.left - (viewport.width - match.width) / 2;
+      overlay.scrollLeft = editor.scrollLeft;
+    }
+  }, [activeMatch, revealRequest]);
   const autosave = useAutosaveFile({ path, loaded });
   const container = useStyles(containerStyle);
   const mirrored = useStyles(mirrorStyle);
@@ -53,7 +82,7 @@ export function TextFileEditor({
       {activeMatch !== undefined && (
         <div ref={mirror} className={mirrored} aria-hidden="true">
           {content.slice(0, activeMatch.start)}
-          <mark className={highlight}>
+          <mark ref={activeMark} className={highlight}>
             {content.slice(activeMatch.start, activeMatch.end)}
           </mark>
           {content.slice(activeMatch.end)}

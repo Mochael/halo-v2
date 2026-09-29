@@ -143,6 +143,119 @@ e2eTest(
   },
 );
 
+e2eTest(
+  "reveals offscreen matches when navigating Find",
+  async ({ app, llm }) => {
+    const filler = Array.from({ length: 100 }, (_, index) => `Filler ${index}`);
+    await app.server.rpc.workspace.writeFile({
+      path: "long.txt",
+      content: ["amber beacon", ...filler, "amber beacon"].join("\n"),
+    });
+    await app.server.rpc.workspace.writeFile({
+      path: "long.md",
+      content: ["# amber beacon", ...filler, "amber beacon"].join("\n\n"),
+    });
+    await app.server.rpc.workspace.writeFile({
+      path: "long.ts",
+      content: [
+        "const amberBeacon = 1;",
+        ...filler.map((_, index) => `const filler${index} = ${index};`),
+        "const amberBeaconTwo = 2;",
+      ].join("\n"),
+    });
+
+    await app.page.getByRole("link", { name: "long.txt" }).click();
+    await app.page.keyboard.press("ControlOrMeta+f");
+    const find = app.page.getByRole("search", { name: "Find in tab" });
+    await find
+      .getByRole("textbox", { name: "Find in tab" })
+      .fill("amber beacon");
+    await expect(find).toContainText("1 of 2");
+    const textMatch = app.page
+      .getByRole("main", { name: "long.txt" })
+      .locator("mark");
+    await expect(textMatch).toBeInViewport();
+    await find.getByRole("textbox", { name: "Find in tab" }).press("Enter");
+    await expect(find).toContainText("2 of 2");
+    await expect(textMatch).toBeInViewport();
+    await find.getByRole("textbox", { name: "Find in tab" }).press("ArrowUp");
+    await expect(find).toContainText("1 of 2");
+    await expect(textMatch).toBeInViewport();
+    await find.getByRole("textbox", { name: "Find in tab" }).press("ArrowDown");
+    await expect(find).toContainText("2 of 2");
+    await expect(textMatch).toBeInViewport();
+    await find.getByRole("textbox", { name: "Find in tab" }).fill("Filler 99");
+    await expect(find).toContainText("1 of 1");
+    await expect(textMatch).toBeInViewport();
+    await app.page
+      .getByRole("textbox", { name: "long.txt" })
+      .evaluate((editor: HTMLTextAreaElement) => editor.scrollTo(0, 0));
+    await expect(textMatch).not.toBeInViewport();
+    await find.getByRole("textbox", { name: "Find in tab" }).press("Enter");
+    await expect(textMatch).toBeInViewport();
+
+    await app.page.getByRole("link", { name: "long.md" }).click();
+    await app.page.keyboard.press("ControlOrMeta+f");
+    await find.getByRole("textbox", { name: "Find in tab" }).fill("");
+    await find
+      .getByRole("textbox", { name: "Find in tab" })
+      .fill("amber beacon");
+    await expect(find).toContainText("1 of 2");
+    const markdownMatch = app.page
+      .getByRole("main", { name: "long.md" })
+      .locator(".halo-find-active-match");
+    await expect(markdownMatch).toBeInViewport();
+    await find.getByRole("button", { name: "Next match" }).click();
+    await expect(find).toContainText("2 of 2");
+    await expect(markdownMatch).toBeInViewport();
+
+    await app.page.getByRole("link", { name: "long.ts" }).click();
+    await app.page.keyboard.press("ControlOrMeta+f");
+    await find.getByRole("textbox", { name: "Find in tab" }).fill("");
+    await find
+      .getByRole("textbox", { name: "Find in tab" })
+      .fill("amberBeacon");
+    await expect(find).toContainText("1 of 2");
+    await find.getByRole("button", { name: "Next match" }).click();
+    await expect(find).toContainText("2 of 2");
+    await expect(
+      app.page
+        .getByRole("main", { name: "long.ts" })
+        .getByText("const amberBeaconTwo = 2;", { exact: true }),
+    ).toBeInViewport();
+
+    const session = await app.server.rpc.sessions.create();
+    const prompt = app.server.rpc.sessions.prompt({
+      ...session,
+      text: "Review the long field note",
+    });
+    await llm.respond(
+      m.assistant(["amber beacon", ...filler, "amber beacon"].join("\n\n")),
+    );
+    await prompt;
+    await app.page
+      .getByRole("link", { name: "Review the long field note" })
+      .click();
+    await app.page.keyboard.press("ControlOrMeta+f");
+    await find.getByRole("textbox", { name: "Find in tab" }).fill("");
+    await find
+      .getByRole("textbox", { name: "Find in tab" })
+      .fill("amber beacon");
+    await expect(find).toContainText("1 of 2");
+    const sessionMatches = app.page
+      .getByRole("log", { name: "Session transcript" })
+      .getByText("amber beacon", { exact: true });
+    await expect(sessionMatches).toHaveCount(2);
+    await expect(sessionMatches.first()).toBeInViewport();
+    await find.getByRole("button", { name: "Next match" }).click();
+    await expect(find).toContainText("2 of 2");
+    await expect(sessionMatches.last()).toBeInViewport();
+    await find.getByRole("button", { name: "Previous match" }).click();
+    await expect(find).toContainText("1 of 2");
+    await expect(sessionMatches.first()).toBeInViewport();
+  },
+);
+
 e2eTest("opens the matching visible Markdown result", async ({ app }) => {
   await app.server.rpc.workspace.writeFile({
     path: "notes.md",

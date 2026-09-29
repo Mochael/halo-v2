@@ -403,13 +403,15 @@ function SessionView({
         id: element.dataset.findSegment!,
         text: element.textContent ?? "",
       })),
-      select: (segmentId) => {
-        const element = elements.find(
-          (item) => item.dataset.findSegment === segmentId,
-        );
-        if (element === undefined) return;
+      select: (segmentId, start, end) => {
+        const range = rangeFor(segmentId, start, end);
+        if (range === undefined) return;
         followLatest.current = false;
-        element.scrollIntoView({ block: "center" });
+        const viewport = root.getBoundingClientRect();
+        const match = range.getBoundingClientRect();
+        if (match.top < viewport.top || match.bottom > viewport.bottom)
+          root.scrollTop +=
+            match.top - viewport.top - (viewport.height - match.height) / 2;
       },
       highlight: (match) => {
         clearHighlight();

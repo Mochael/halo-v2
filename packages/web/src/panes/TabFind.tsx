@@ -64,6 +64,7 @@ export function TabFind({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
+  const [navigation, setNavigation] = useState(0);
   const [target, setTarget] = useState<{ segmentId: string; offset: number }>();
   const input = useRef<HTMLInputElement>(null);
   const bar = useStyles(styles.bar);
@@ -95,6 +96,7 @@ export function TabFind({
       )
         return;
       setOpen(true);
+      setNavigation((current) => current + 1);
       if (detail.query !== undefined) setQuery(detail.query);
       if (detail.index !== undefined) setIndex(detail.index);
       setTarget(
@@ -126,8 +128,8 @@ export function TabFind({
   const hasSource = source !== undefined;
   // Editing rebuilds the source; only Find navigation should move the caret.
   const selectionIntent = useMemo(
-    () => ({ open, query, index, target, hasSource, path }),
-    [open, query, index, target, hasSource, path],
+    () => ({ open, query, index, navigation, target, hasSource, path }),
+    [open, query, index, navigation, target, hasSource, path],
   );
   const previousSelectionIntent = useRef<typeof selectionIntent>(undefined);
   const previousSource = useRef<FindSource>(undefined);
@@ -169,6 +171,13 @@ export function TabFind({
     return () => source.highlight?.(undefined);
   }, [open, source, matches, selectedIndex, selectionIntent]);
 
+  const navigate = (direction: -1 | 1) => {
+    const resultCount = Math.max(matches.length, 1);
+    setNavigation((current) => current + 1);
+    setIndex((selectedIndex + direction + resultCount) % resultCount);
+    setTarget(undefined);
+  };
+
   return (
     <FindContext value={setSource}>
       {children}
@@ -182,14 +191,17 @@ export function TabFind({
               event.preventDefault();
               event.stopPropagation();
               setOpen(false);
+              return;
             }
-            if (event.key === "Enter") {
+            if (event.key === "Enter" && event.target === input.current) {
               event.preventDefault();
-              setIndex(
-                (selectedIndex + (event.shiftKey ? matches.length - 1 : 1)) %
-                  Math.max(matches.length, 1),
-              );
-              setTarget(undefined);
+              event.stopPropagation();
+              navigate(event.shiftKey ? -1 : 1);
+            }
+            if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+              event.preventDefault();
+              event.stopPropagation();
+              navigate(event.key === "ArrowUp" ? -1 : 1);
             }
           }}
         >
@@ -214,13 +226,7 @@ export function TabFind({
             className={button}
             type="button"
             aria-label="Previous match"
-            onClick={() => {
-              setIndex(
-                (selectedIndex + matches.length - 1) %
-                  Math.max(matches.length, 1),
-              );
-              setTarget(undefined);
-            }}
+            onClick={() => navigate(-1)}
           >
             ↑
           </button>
@@ -228,10 +234,7 @@ export function TabFind({
             className={button}
             type="button"
             aria-label="Next match"
-            onClick={() => {
-              setIndex((selectedIndex + 1) % Math.max(matches.length, 1));
-              setTarget(undefined);
-            }}
+            onClick={() => navigate(1)}
           >
             ↓
           </button>
