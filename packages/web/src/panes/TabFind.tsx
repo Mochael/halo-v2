@@ -1,0 +1,234 @@
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { backgroundColor, colors, radius, shadow, text } from "maui";
+import { style, useStyles } from "purse-styles";
+
+type FindSegment = { id: string; text: string };
+type FindSource = {
+  segments: FindSegment[];
+  select: (segmentId: string, start: number, end: number) => void;
+  highlight?: (match: Match | undefined) => void;
+};
+type Match = { segmentId: string; start: number; end: number };
+
+const FindContext = createContext<(source: FindSource | undefined) => void>(
+  () => {},
+);
+
+export function useTabFindSource(source: FindSource | undefined) {
+  const setSource = useContext(FindContext);
+  useEffect(() => {
+    setSource(source);
+    return () => setSource(undefined);
+  }, [setSource, source]);
+}
+
+function findMatches(segments: readonly FindSegment[], query: string): Match[] {
+  if (query.length === 0) return [];
+  const needle = query.toLocaleLowerCase();
+  const matches: Match[] = [];
+  for (const segment of segments) {
+    const haystack = segment.text.toLocaleLowerCase();
+    for (
+      let start = haystack.indexOf(needle);
+      start !== -1;
+      start = haystack.indexOf(needle, start + Math.max(needle.length, 1))
+    ) {
+      matches.push({
+        segmentId: segment.id,
+        start,
+        end: start + needle.length,
+      });
+    }
+  }
+  return matches;
+}
+
+export function TabFind({
+  active,
+  path,
+  children,
+}: {
+  active: boolean;
+  path: string;
+  children: ReactNode;
+}) {
+  const [source, setSource] = useState<FindSource>();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [index, setIndex] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const bar = useStyles(styles.bar);
+  const field = useStyles(styles.field);
+  const button = useStyles(styles.button);
+  const count = useStyles(styles.count);
+  const matches = useMemo(
+    () => findMatches(source?.segments ?? [], query),
+    [source, query],
+  );
+
+  useEffect(() => {
+    if (!active) return;
+    const listener = (event: Event) => {
+      // SAFETY: Halo's `halo:find` dispatcher supplies this event detail.
+      const detail = (
+        event as CustomEvent<{
+          kind: "tab" | "global";
+          query?: string;
+          index?: number;
+          path?: string;
+        }>
+      ).detail;
+      if (
+        detail.kind !== "tab" ||
+        (detail.path !== undefined && detail.path !== path)
+      )
+        return;
+      setOpen(true);
+      if (detail.query !== undefined) setQuery(detail.query);
+      if (detail.index !== undefined) setIndex(detail.index);
+      requestAnimationFrame(() => input.current?.focus());
+    };
+    window.addEventListener("halo:find", listener);
+    return () => window.removeEventListener("halo:find", listener);
+  }, [active, path]);
+
+  useEffect(() => {
+    if (source === undefined) return;
+    if (!open) {
+      source.highlight?.(undefined);
+      if (matches.length > 0) {
+        const match = matches[index % matches.length]!;
+        source.select(match.segmentId, match.start, match.end);
+      }
+      return;
+    }
+    if (matches.length === 0) {
+      source.highlight?.(undefined);
+      return;
+    }
+    const match = matches[index % matches.length]!;
+    source.highlight?.(match);
+    source.select(match.segmentId, match.start, match.end);
+    return () => source.highlight?.(undefined);
+  }, [open, source, matches, index]);
+
+  return (
+    <FindContext value={setSource}>
+      {children}
+      {open && source !== undefined && (
+        <div
+          className={bar}
+          role="search"
+          aria-label="Find in tab"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              setOpen(false);
+            }
+            if (event.key === "Enter") {
+              event.preventDefault();
+              setIndex(
+                (current) =>
+                  (current + (event.shiftKey ? matches.length - 1 : 1)) %
+                  Math.max(matches.length, 1),
+              );
+            }
+          }}
+        >
+          <input
+            ref={input}
+            className={field}
+            aria-label="Find in tab"
+            placeholder="Find"
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setIndex(0);
+            }}
+          />
+          <span className={count} aria-live="polite">
+            {matches.length === 0
+              ? "0 results"
+              : `${(index % matches.length) + 1} of ${matches.length}`}
+          </span>
+          <button
+            className={button}
+            type="button"
+            aria-label="Previous match"
+            onClick={() =>
+              setIndex(
+                (current) =>
+                  (current + matches.length - 1) % Math.max(matches.length, 1),
+              )
+            }
+          >
+            ↑
+          </button>
+          <button
+            className={button}
+            type="button"
+            aria-label="Next match"
+            onClick={() =>
+              setIndex((current) => (current + 1) % Math.max(matches.length, 1))
+            }
+          >
+            ↓
+          </button>
+          <button
+            className={button}
+            type="button"
+            aria-label="Close find"
+            onClick={() => setOpen(false)}
+          >
+            ×
+          </button>
+        </div>
+      )}
+    </FindContext>
+  );
+}
+
+const styles = {
+  bar: style(shadow.medium, radius.md, {
+    position: "absolute",
+    zIndex: 20,
+    top: 8,
+    right: 12,
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: 6,
+    backgroundColor: backgroundColor.element,
+  }),
+  field: style(text({ size: "sm" }), {
+    width: 200,
+    minWidth: 80,
+    padding: "4px 6px",
+    color: colors.gray[12],
+    backgroundColor: backgroundColor.app,
+    border: `1px solid ${colors.gray[7]}`,
+    borderRadius: 4,
+  }),
+  button: style(text({ size: "sm" }), {
+    minWidth: 26,
+    height: 26,
+    border: 0,
+    borderRadius: 4,
+    color: colors.gray[12],
+    backgroundColor: "transparent",
+    cursor: "pointer",
+    "&:hover": { backgroundColor: backgroundColor.elementHover },
+  }),
+  count: style(text({ size: "xs", color: "lowContrast" }), {
+    whiteSpace: "nowrap",
+  }),
+};

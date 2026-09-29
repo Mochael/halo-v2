@@ -2,7 +2,7 @@ import { useRestartWarning } from "../../confirmRestart.js";
 import { useIsActiveTab } from "../../panes/WorkspacePanesProvider.js";
 import { useMarkSessionRead } from "./useMarkSessionRead.js";
 import { lastAssistantTurnWasAborted } from "./sessionView.js";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
@@ -36,6 +36,7 @@ import { BashExecution } from "./BashExecution.tsx";
 import { Editor } from "./Editor.tsx";
 import { ExecutorConnectionCard } from "./ExecutorConnectionCard.tsx";
 import { ToolActivity } from "./ToolActivity.tsx";
+import { useTabFindSource } from "../../panes/TabFind.js";
 
 export function AgentPane({
   sessionId,
@@ -342,11 +343,61 @@ function SessionView({
   sessionId: string | undefined;
 }) {
   const viewRef = useRef<HTMLDivElement>(null);
+  const [findSource, setFindSource] = useState<{
+    segments: { id: string; text: string }[];
+    select: (segmentId: string, start: number, end: number) => void;
+  }>();
+  useTabFindSource(findSource);
   const followLatest = useRef(true);
   const viewedSessionId = useRef(sessionId);
   const view = useStyles(styles.view);
   const stopped = useStyles(styles.stopped);
-  const items = sessionViewItems(state);
+  const items = useMemo(() => sessionViewItems(state), [state]);
+  useLayoutEffect(() => {
+    const root = viewRef.current;
+    if (root === null) return;
+    const elements =
+      state.entries.length > 0 || state.activeRun !== undefined
+        ? Array.from(root.querySelectorAll<HTMLElement>("[data-find-segment]"))
+        : [];
+    setFindSource({
+      segments: elements.map((element) => ({
+        id: element.dataset.findSegment!,
+        text: element.textContent ?? "",
+      })),
+      select: (segmentId, start, end) => {
+        const element = elements.find(
+          (item) => item.dataset.findSegment === segmentId,
+        );
+        if (element === undefined) return;
+        followLatest.current = false;
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        const nodes: Text[] = [];
+        while (walker.nextNode()) {
+          // SAFETY: SHOW_TEXT restricts currentNode to Text nodes.
+          nodes.push(walker.currentNode as Text);
+        }
+        const point = (offset: number) => {
+          let remaining = offset;
+          for (const node of nodes) {
+            if (remaining <= node.length) return { node, offset: remaining };
+            remaining -= node.length;
+          }
+          return { node: nodes.at(-1), offset: nodes.at(-1)?.length ?? 0 };
+        };
+        const from = point(start);
+        const to = point(end);
+        if (from.node === undefined || to.node === undefined) return;
+        const range = document.createRange();
+        range.setStart(from.node, from.offset);
+        range.setEnd(to.node, to.offset);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        element.scrollIntoView({ block: "center" });
+      },
+    });
+  }, [state]);
   const showStopped =
     state.activeRun === undefined &&
     lastAssistantTurnWasAborted(sessionMessages(state));
@@ -418,7 +469,9 @@ function SessionViewRow({
       <div className={userRow}>
         <article className={userMessage} aria-label="You message">
           {item.text.length > 0 ? (
-            <div className={body}>{item.text}</div>
+            <div className={body} data-find-segment={item.id}>
+              {item.text}
+            </div>
           ) : undefined}
           {item.attachments.length > 0 ? (
             <ul className={attachmentList} aria-label="Attached files">
@@ -458,14 +511,15 @@ function SessionViewRow({
           );
         }
         return (
-          <AssistantMessage
-            key={part.id}
-            size="sm"
-            className={assistantMessage}
-            isAnimating={part.streaming}
-          >
-            {part.text}
-          </AssistantMessage>
+          <div key={part.id} data-find-segment={part.id}>
+            <AssistantMessage
+              size="sm"
+              className={assistantMessage}
+              isAnimating={part.streaming}
+            >
+              {part.text}
+            </AssistantMessage>
+          </div>
         );
       })}
     </div>
