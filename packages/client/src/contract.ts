@@ -3,6 +3,7 @@ import type { Hotkey, HotkeyInput } from "./hotkeys.js";
 import type { Routine, RoutineInput, RoutineRun } from "./routines.js";
 import type { ChatPrompt } from "./chatAttachments.js";
 import type { WorkspaceFilePreview } from "./rpc.js";
+import type { WorkspaceSearchResponse } from "./search.js";
 import {
   asyncIteratorObject,
   error,
@@ -25,8 +26,8 @@ import type {
   WorkspaceTreeEvent,
 } from "./rpc.js";
 
-export const haloProtocolVersion = 22 as const;
-export const haloSupportedProtocols = [18, 19, 21, haloProtocolVersion];
+export const haloProtocolVersion = 23 as const;
+export const haloSupportedProtocols = [18, 19, 21, 22, haloProtocolVersion];
 
 export const RequestRejectedError = error("BAD_REQUEST", {
   message: "Halo could not complete the request.",
@@ -113,6 +114,9 @@ export const contract = publicProcedure.router({
   workspace: {
     get: oc.output(type<WorkspaceInfo>()),
     listPaths: oc.output(type<string[]>()),
+    search: oc
+      .input(type<{ query: string }>())
+      .output(type<WorkspaceSearchResponse>()),
     createEntry: oc
       .input(type<{ path: string; kind: "file" | "directory" }>())
       .output(type<{ path: string }>()),
