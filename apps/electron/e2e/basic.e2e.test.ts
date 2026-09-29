@@ -1316,6 +1316,9 @@ e2eTest(
     await expect(
       app.page.getByRole("status").filter({ hasText: "Uploaded" }),
     ).toHaveText("Uploaded 1 item.");
+    await expect(
+      app.page.getByRole("status").filter({ hasText: "Uploaded" }),
+    ).toBeHidden({ timeout: 7_000 });
     expect(
       await app.server.rpc.workspace.readFile({ path: "Archive/notes.txt" }),
     ).toBe("Notes from this computer");

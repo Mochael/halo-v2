@@ -4,7 +4,13 @@ import {
   uploadDroppedFiles,
 } from "./droppedFiles.js";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState, type DragEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type DragEvent,
+  type ReactNode,
+} from "react";
 import {
   Button,
   Menu,
@@ -74,6 +80,11 @@ export function FilesystemSection() {
   const [dragged, setDragged] = useState<string>();
   const [dropTarget, setDropTarget] = useState<string>();
   const [uploadStatus, setUploadStatus] = useState<string>();
+  useEffect(() => {
+    if (!uploadStatus?.startsWith("Uploaded ")) return;
+    const timeout = setTimeout(() => setUploadStatus(undefined), 5_000);
+    return () => clearTimeout(timeout);
+  }, [uploadStatus]);
   const dropRow = useStyles(styles.dropRow);
   const feedback = useStyles(styles.feedback);
   const controls = useStyles(styles.controls);
