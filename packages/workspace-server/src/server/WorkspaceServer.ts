@@ -14,6 +14,7 @@ import { ExtensionHost } from "../extensions/ExtensionHost.js";
 import type { ExtensionRuntime } from "../extensions/startExtension.js";
 import { SessionRegistry } from "../sessions/SessionRegistry.js";
 import { WorkspaceService } from "../workspace/WorkspaceService.js";
+import { WorkspaceSearch } from "../workspace/WorkspaceSearch.js";
 import { StaticAgentAuthority } from "../agent/runtime/AgentAuthority.js";
 import type { CredentialVault } from "../agent/runtime/CredentialVault.js";
 import { ConnectionService } from "../agent/runtime/ConnectionService.js";
@@ -203,6 +204,7 @@ export class WorkspaceServer {
         });
     });
     const sessionRepo = new TursoSessionRepo(database);
+    const search = new WorkspaceSearch({ workspace, database });
     cleanup.defer(async () => {
       const closed = await sessionRepo.close();
       if (closed instanceof Error)
@@ -313,6 +315,7 @@ export class WorkspaceServer {
         browsers,
         extensions,
         workspace,
+        search,
         sessions,
         connections: connectionService,
         toolRuntime,

@@ -34,6 +34,7 @@ export {
   type BrowserSnapshot,
   type BrowserExecution,
 } from "./contract.js";
+export type { WorkspaceSearchHit, WorkspaceSearchResponse } from "./search.js";
 export {
   connectionRequestSchema,
   connectionRequestKey,
