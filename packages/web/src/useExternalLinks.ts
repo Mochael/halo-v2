@@ -20,7 +20,8 @@ export function useExternalLinks(host: HostApi) {
         link.isContentEditable &&
         !event.metaKey &&
         !event.ctrlKey &&
-        event.button !== 1
+        event.button !== 1 &&
+        !(event instanceof PointerEvent && event.pointerType === "touch")
       )
         return;
       event.preventDefault();
