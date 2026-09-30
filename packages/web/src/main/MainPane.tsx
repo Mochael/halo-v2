@@ -31,7 +31,11 @@ export function MainPane({ sessions }: { sessions: SessionSummary[] }) {
       </Route>
       <Route path="/sessions/:sessionId">
         {(params) => (
-          <AgentPane sessionId={params.sessionId} sessions={sessions} />
+          <AgentPane
+            key={params.sessionId}
+            sessionId={params.sessionId}
+            sessions={sessions}
+          />
         )}
       </Route>
     </Switch>
