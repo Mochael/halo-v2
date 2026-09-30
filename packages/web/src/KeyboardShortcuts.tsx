@@ -19,6 +19,10 @@ import { matchesHotkey, type HotkeyAction } from "@get-halo/client";
 import { useHotkeys } from "./api/WorkspaceUpdatesProvider.js";
 import { useApi } from "./api/ApiProvider.js";
 import { sessionTitleQueryKey } from "./main/agent/useAgentSession.js";
+import {
+  captureFileSelection,
+  draftReferencesQueryKey,
+} from "./main/chatReferences.js";
 
 class HotkeyRunError extends errore.createTaggedError({
   name: "HotkeyRunError",
@@ -109,8 +113,12 @@ export function KeyboardShortcuts() {
         });
         return;
       }
+      const draftId = crypto.randomUUID();
+      const reference = captureFileSelection();
+      if (reference !== undefined)
+        queryClient.setQueryData(draftReferencesQueryKey(draftId), [reference]);
       workspace.open({
-        path: `/draft/${crypto.randomUUID()}`,
+        path: `/draft/${draftId}`,
         newTab: action.type === "newTab",
       });
     },

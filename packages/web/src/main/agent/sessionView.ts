@@ -11,10 +11,17 @@ import {
   connectionRequestSchema,
   type ConnectionRequest,
   type ChatAttachment,
+  type ChatReference,
 } from "@get-halo/client";
 
 export type SessionViewItem =
-  | { kind: "user"; id: string; text: string; attachments: ChatAttachment[] }
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      attachments: ChatAttachment[];
+      references: ChatReference[];
+    }
   | {
       kind: "bashExecution";
       id: string;
@@ -197,6 +204,7 @@ export function sessionViewItems(state: SessionSnapshot): SessionViewItem[] {
         id: entry.id,
         text: userText(message),
         attachments: message.attachments ?? [],
+        references: message.references ?? [],
       });
       continue;
     }

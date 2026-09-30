@@ -12,6 +12,8 @@ import {
 } from "./MarkdownFindHighlight.js";
 import { useApi } from "../api/ApiProvider.js";
 import { useTabFindSource } from "../panes/TabFind.js";
+import { useIsActiveTab } from "../panes/WorkspacePanesProvider.js";
+import { observeFileSelection } from "./chatReferences.js";
 
 export function MarkdownFileEditor({
   path,
@@ -21,6 +23,7 @@ export function MarkdownFileEditor({
   loaded: string;
 }) {
   const autosave = useAutosaveFile({ path, loaded });
+  const isActiveTab = useIsActiveTab();
   const api = useApi();
   const apiRef = useRef(api);
   useEffect(() => {
@@ -55,6 +58,27 @@ export function MarkdownFileEditor({
     extensions,
   });
   const doc = editor?.state.doc;
+  useEffect(() => {
+    if (!isActiveTab || editor === null) return;
+    return observeFileSelection(() => {
+      const nativeSelection = document.getSelection();
+      if (
+        nativeSelection !== null &&
+        !nativeSelection.isCollapsed &&
+        editor.view.dom.contains(nativeSelection.anchorNode) &&
+        editor.view.dom.contains(nativeSelection.focusNode)
+      ) {
+        const selectedText = nativeSelection.toString().trim();
+        if (selectedText) return { path, text: selectedText };
+      }
+      const selection = editor.state.selection;
+      if (selection.empty) return undefined;
+      const text = editor.state.doc
+        .textBetween(selection.from, selection.to, "\n")
+        .trim();
+      return text ? { path, text } : undefined;
+    });
+  }, [editor, isActiveTab, path]);
   const findSource = useMemo(() => {
     if (editor === null || doc === undefined) return undefined;
     const blocks: {

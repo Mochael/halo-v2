@@ -574,9 +574,9 @@ async function readSessionSummary(
 }
 
 function userTitle(message: Extract<HaloMessage, { role: "user" }>) {
-  if (message.attachments === undefined) return contentText(message.content);
   return chatPromptTitle({
     text: message.displayText ?? contentText(message.content),
     files: message.attachments,
+    references: message.references,
   });
 }

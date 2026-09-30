@@ -1,8 +1,10 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { backgroundColor, colors, monoFontFamily, text } from "maui";
 import { style, useStyles } from "purse-styles";
 import { useAutosaveFile } from "./useAutosaveFile.js";
 import { useTabFindSource } from "../panes/TabFind.js";
+import { useIsActiveTab } from "../panes/WorkspacePanesProvider.js";
+import { observeFileSelection } from "./chatReferences.js";
 
 export function TextFileEditor({
   path,
@@ -12,6 +14,7 @@ export function TextFileEditor({
   loaded: string;
 }) {
   const [content, setContent] = useState(loaded);
+  const isActiveTab = useIsActiveTab();
   const [activeMatch, setActiveMatch] = useState<{
     start: number;
     end: number;
@@ -42,6 +45,18 @@ export function TextFileEditor({
     [path, content],
   );
   useTabFindSource(findSource);
+  useEffect(() => {
+    if (!isActiveTab) return;
+    return observeFileSelection(() => {
+      const editor = input.current;
+      if (editor === null || editor.selectionStart === editor.selectionEnd)
+        return undefined;
+      const selectedText = editor.value
+        .slice(editor.selectionStart, editor.selectionEnd)
+        .trim();
+      return selectedText ? { path, text: selectedText } : undefined;
+    });
+  }, [isActiveTab, path]);
   useLayoutEffect(() => {
     if (activeMatch === undefined) return;
     const editor = input.current;

@@ -23,6 +23,7 @@ import {
   type HaloConnectionEvent,
   type HaloConnectionState,
   type ChatPrompt,
+  chatPromptContent,
 } from "@get-halo/client";
 import { prepareChatAttachments } from "./chatAttachments.js";
 import type { WorkspaceLayout } from "../workspace/WorkspaceService.js";
@@ -269,7 +270,10 @@ export class HaloAgentSession {
   async prompt(input: ChatPrompt) {
     const text = input.text.trim();
     const files = input.files ?? [];
-    if (text.length === 0 && files.length === 0) return new EmptyPromptError();
+    const references = input.references ?? [];
+    if (text.length === 0 && files.length === 0 && references.length === 0)
+      return new EmptyPromptError();
+    const content = chatPromptContent(text, references);
     if (files.length > 0) {
       const prepared = await prepareChatAttachments({
         files,
@@ -278,9 +282,10 @@ export class HaloAgentSession {
       if (prepared instanceof Error) return prepared;
       const message: Extract<StoredMessage, { role: "user" }> = {
         role: "user",
-        content: [{ type: "text", text }, ...prepared.content],
+        content: [{ type: "text", text: content }, ...prepared.content],
         displayText: text,
         attachments: prepared.attachments,
+        references,
         clientMessageId: input.clientMessageId,
         timestamp: Date.now(),
       };
@@ -288,7 +293,9 @@ export class HaloAgentSession {
     }
     const message: Extract<StoredMessage, { role: "user" }> = {
       role: "user",
-      content: text,
+      content,
+      displayText: text,
+      references,
       clientMessageId: input.clientMessageId,
       timestamp: Date.now(),
     };

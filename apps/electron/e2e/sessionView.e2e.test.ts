@@ -6,6 +6,98 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 e2eTest(
+  "references a workspace file from the composer without sending its full content",
+  async ({ app, harness, llm }, testInfo) => {
+    await harness.tools.files.write({
+      path: "brief.md",
+      content: "The hidden detail is violet lantern.",
+    });
+    await app.page
+      .getByRole("button", { name: "New session", exact: true })
+      .click();
+    const pane = app.page.getByRole("main", { name: "New session" });
+    await pane.getByLabel("Message", { exact: true }).fill("Review @brief");
+    await expect(pane.getByRole("option", { name: /brief\.md/ })).toBeVisible();
+    await app.page.screenshot({
+      path: testInfo.outputPath("reference-picker.png"),
+    });
+    await pane.getByRole("option", { name: /brief\.md/ }).click();
+    const references = pane.getByRole("list", { name: "Referenced files" });
+    await expect(references).toContainText("brief.md");
+    await expect(pane.getByLabel("Message", { exact: true })).toHaveText(
+      "Review ",
+    );
+    await pane.getByRole("button", { name: "Send", exact: true }).click();
+    await llm.respond(({ messages }) => {
+      const user = messages.findLast((message) => message.role === "user");
+      expect(user).toBeDefined();
+      expect(messageText(user!)).toContain('File: "brief.md"');
+      expect(messageText(user!)).not.toContain("violet lantern");
+      return m.assistant("I can read the brief when needed.");
+    });
+    const sent = app.page.getByRole("article", { name: "You message" });
+    await expect(sent).toContainText("brief.md");
+    await expect(sent).not.toContainText("Workspace references:");
+    await expect(
+      app.page.getByRole("tab", { name: "Review", selected: true }),
+    ).toBeVisible();
+  },
+);
+
+e2eTest(
+  "carries selected document text into a new chat and the model request",
+  async ({ app, harness, llm }) => {
+    await harness.tools.files.write({
+      path: "notes.md",
+      content:
+        "# Planning\n\nKeep the copper bridge.\n\nLeave the distant orchard untouched.",
+    });
+    await app.page.getByRole("link", { name: "notes.md", exact: true }).click();
+    const editor = app.page
+      .getByRole("main", { name: "notes.md" })
+      .getByLabel("notes.md");
+    await expect(editor).toContainText("Keep the copper bridge");
+    await editor.evaluate((element) => {
+      const paragraph = [...element.querySelectorAll("p")].find((item) =>
+        item.textContent?.includes("Keep the copper bridge"),
+      )!;
+      const range = document.createRange();
+      range.selectNodeContents(paragraph);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+    await expect
+      .poll(
+        async () =>
+          await app.page.evaluate(() => window.getSelection()?.toString()),
+      )
+      .toBe("Keep the copper bridge.");
+    await app.pressShortcut({ key: "T" });
+    const draft = app.page.getByRole("main", { name: "New session" });
+    await expect(
+      draft.getByRole("list", { name: "Referenced files" }),
+    ).toContainText("Keep the copper bridge.");
+    await draft
+      .getByLabel("Message", { exact: true })
+      .fill("What does this imply?");
+    await draft.getByRole("button", { name: "Send", exact: true }).click();
+    await llm.respond(({ messages }) => {
+      const user = messages.findLast((message) => message.role === "user");
+      expect(user).toBeDefined();
+      expect(messageText(user!)).toContain(
+        'Selected text from "notes.md":\nKeep the copper bridge.',
+      );
+      expect(messageText(user!)).not.toContain("distant orchard");
+      return m.assistant("The copper bridge should remain.");
+    });
+    await expect(
+      app.page.getByRole("article", { name: "You message" }),
+    ).toContainText("Keep the copper bridge.");
+  },
+);
+
+e2eTest(
   "drops images, PDFs, and Word files into chat and keeps their model context after reload",
   async ({ app, llm }, testInfo) => {
     await app.page

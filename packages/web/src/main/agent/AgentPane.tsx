@@ -3,7 +3,7 @@ import { useIsActiveTab } from "../../panes/WorkspacePanesProvider.js";
 import { useMarkSessionRead } from "./useMarkSessionRead.js";
 import { lastAssistantTurnWasAborted } from "./sessionView.js";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { skipToken, useQuery } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
   Button,
@@ -29,6 +29,7 @@ import {
   type SessionSnapshot,
   type SessionSummary,
   type ChatPrompt,
+  type ChatReference,
   validateChatFiles,
 } from "@get-halo/client";
 import { AssistantMessage } from "./AssistantMessage.tsx";
@@ -37,6 +38,11 @@ import { Editor } from "./Editor.tsx";
 import { ExecutorConnectionCard } from "./ExecutorConnectionCard.tsx";
 import { ToolActivity } from "./ToolActivity.tsx";
 import { useTabFindSource } from "../../panes/TabFind.js";
+import {
+  useWorkspacePathsQuery,
+  useWorkspaceQuery,
+} from "../../api/ApiProvider.js";
+import { draftReferencesQueryKey } from "../chatReferences.js";
 import {
   clearMessageDraft,
   useMessageDraft,
@@ -75,6 +81,10 @@ export function AgentPane({
 
 export function DraftAgentPane({ draftId }: { draftId: string }) {
   const [, navigate] = useLocation();
+  const queryClient = useQueryClient();
+  const initialReferences = queryClient.getQueryData<ChatReference[]>(
+    draftReferencesQueryKey(draftId),
+  );
   const draftKey = useMessageDraftKey({ kind: "draft", messageId: draftId });
   const session = useDraftAgentSession((createdSessionId) => {
     clearMessageDraft(draftKey);
@@ -83,6 +93,7 @@ export function DraftAgentPane({ draftId }: { draftId: string }) {
   return (
     <ChatPane
       draftId={draftId}
+      initialReferences={initialReferences}
       draftKey={draftKey}
       {...session}
       title={session.title ?? "New session"}
@@ -93,6 +104,7 @@ export function DraftAgentPane({ draftId }: { draftId: string }) {
 function ChatPane({
   sessionId,
   draftId,
+  initialReferences = [],
   draftKey,
   title,
   state,
@@ -102,6 +114,7 @@ function ChatPane({
 }: {
   sessionId: string | undefined;
   draftId?: string;
+  initialReferences?: ChatReference[];
   draftKey: string | undefined;
   title: string | undefined;
   state: SessionSnapshot;
@@ -111,6 +124,12 @@ function ChatPane({
 }) {
   const isActiveTab = useIsActiveTab();
   const [draft, setDraft] = useMessageDraft(draftKey);
+  const [references, setReferences] =
+    useState<ChatReference[]>(initialReferences);
+  const workspace = useWorkspaceQuery().data;
+  const paths = useWorkspacePathsQuery(workspace).data?.filter(
+    (path) => !path.endsWith("/"),
+  );
   const [attachments, setAttachments] = useState<{ id: string; file: File }[]>(
     [],
   );
@@ -133,11 +152,13 @@ function ChatPane({
   const attachmentList = useStyles(styles.attachmentList);
   const attachmentChip = useStyles(styles.attachmentChip);
   const attachmentName = useStyles(styles.attachmentName);
+  const referenceExcerpt = useStyles(styles.referenceExcerpt);
   const composerActions = useStyles(styles.composerActions);
   const progress = useStyles(styles.progress);
   const dropOverlay = useStyles(styles.dropOverlay);
-  const hasContent = draft.trim().length > 0 || attachments.length > 0;
-  useRestartWarning(attachments.length > 0);
+  const hasContent =
+    draft.trim().length > 0 || attachments.length > 0 || references.length > 0;
+  useRestartWarning(attachments.length > 0 || references.length > 0);
   const showStop = state.activeRun !== undefined && !hasContent && !sending;
   const displayError = localError ?? error;
 
@@ -166,6 +187,7 @@ function ChatPane({
     setSending(false);
     setDraft("");
     setAttachments([]);
+    setReferences([]);
   }, [state.entries, setDraft]);
 
   function addFiles(files: File[]) {
@@ -200,6 +222,7 @@ function ChatPane({
     const result = await prompt({
       text: draft.trim(),
       files: attachments.map((item) => item.file),
+      references,
       clientMessageId,
     });
     if (submitting.current !== clientMessageId) return;
@@ -211,6 +234,7 @@ function ChatPane({
     }
     setDraft("");
     setAttachments([]);
+    setReferences([]);
   }
 
   return (
@@ -278,31 +302,87 @@ function ChatPane({
             aria-label="Message"
             size="sm"
             className={composer}
+            referencePaths={paths}
+            referencePlacement={
+              draftId !== undefined && state.entries.length === 0
+                ? "below"
+                : "above"
+            }
+            onAddReference={(path) =>
+              setReferences((current) =>
+                current.some((reference) => reference.path === path)
+                  ? current
+                  : [...current, { path }],
+              )
+            }
             header={
-              attachments.length === 0 ? undefined : (
-                <ul className={attachmentList} aria-label="Attachments">
-                  {attachments.map(({ id, file }) => (
-                    <li className={attachmentChip} key={id}>
-                      <FileText size="sm" aria-hidden="true" />
-                      <span className={attachmentName} title={file.name}>
-                        {file.name}
-                      </span>
-                      <Button
-                        variant="quiet"
-                        aria-label={`Remove ${file.name}`}
-                        isDisabled={sending}
-                        onClick={() => {
-                          setAttachments((current) =>
-                            current.filter((item) => item.id !== id),
-                          );
-                          setLocalError(undefined);
-                        }}
-                      >
-                        <Close size="sm" aria-hidden="true" />
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
+              attachments.length === 0 &&
+              references.length === 0 ? undefined : (
+                <>
+                  {references.length > 0 ? (
+                    <ul
+                      className={attachmentList}
+                      aria-label="Referenced files"
+                    >
+                      {references.map((reference) => (
+                        <li className={attachmentChip} key={reference.path}>
+                          <FileText size="sm" aria-hidden="true" />
+                          <span
+                            className={attachmentName}
+                            title={reference.path}
+                          >
+                            {reference.path}
+                          </span>
+                          {reference.text === undefined ? undefined : (
+                            <span
+                              className={referenceExcerpt}
+                              title={reference.text}
+                            >
+                              “{reference.text}”
+                            </span>
+                          )}
+                          <Button
+                            variant="quiet"
+                            aria-label={`Remove reference ${reference.path}`}
+                            isDisabled={sending}
+                            onClick={() =>
+                              setReferences((current) =>
+                                current.filter((item) => item !== reference),
+                              )
+                            }
+                          >
+                            <Close size="sm" aria-hidden="true" />
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : undefined}
+                  {attachments.length > 0 ? (
+                    <ul className={attachmentList} aria-label="Attachments">
+                      {attachments.map(({ id, file }) => (
+                        <li className={attachmentChip} key={id}>
+                          <FileText size="sm" aria-hidden="true" />
+                          <span className={attachmentName} title={file.name}>
+                            {file.name}
+                          </span>
+                          <Button
+                            variant="quiet"
+                            aria-label={`Remove ${file.name}`}
+                            isDisabled={sending}
+                            onClick={() => {
+                              setAttachments((current) =>
+                                current.filter((item) => item.id !== id),
+                              );
+                              setLocalError(undefined);
+                            }}
+                          >
+                            <Close size="sm" aria-hidden="true" />
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : undefined}
+                </>
               )
             }
             error={
@@ -515,6 +595,7 @@ function SessionViewRow({
   const attachmentList = useStyles(styles.attachmentList);
   const attachmentChip = useStyles(styles.attachmentChip);
   const attachmentName = useStyles(styles.attachmentName);
+  const referenceExcerpt = useStyles(styles.referenceExcerpt);
 
   if (item.kind === "bashExecution")
     return <BashExecution message={item.message} />;
@@ -540,6 +621,28 @@ function SessionViewRow({
                     <span className={attachmentName} title={attachment.name}>
                       {attachment.name}
                     </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : undefined}
+          {item.references.length > 0 ? (
+            <ul className={attachmentList} aria-label="Referenced files">
+              {item.references.map((reference, index) => (
+                <li key={`${reference.path}-${index}`}>
+                  <Link
+                    href={`/files/${reference.path.split("/").map(encodeURIComponent).join("/")}`}
+                    className={attachmentChip}
+                  >
+                    <FileText size="sm" aria-hidden="true" />
+                    <span className={attachmentName} title={reference.path}>
+                      {reference.path}
+                    </span>
+                    {reference.text === undefined ? undefined : (
+                      <span className={referenceExcerpt} title={reference.text}>
+                        “{reference.text}”
+                      </span>
+                    )}
                   </Link>
                 </li>
               ))}
@@ -629,6 +732,12 @@ const styles = {
   attachmentName: style({
     maxWidth: "28ch",
     minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  }),
+  referenceExcerpt: style(text({ size: "xs", color: "lowContrast" }), {
+    maxWidth: "18ch",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",

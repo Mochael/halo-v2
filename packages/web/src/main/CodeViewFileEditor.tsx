@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Editor,
   type EditorOptions,
@@ -14,6 +14,8 @@ import { monoFontFamily, useTheme } from "maui";
 import { style, useStyles } from "purse-styles";
 import { useAutosaveFile } from "./useAutosaveFile.ts";
 import { useTabFindSource } from "../panes/TabFind.js";
+import { useIsActiveTab } from "../panes/WorkspacePanesProvider.js";
+import { observeFileSelection } from "./chatReferences.js";
 
 const diffsTheme = {
   dark: "pierre-dark",
@@ -37,6 +39,7 @@ export function CodeViewFileEditor({
   loaded: string;
 }) {
   const { resolvedTheme } = useTheme();
+  const isActiveTab = useIsActiveTab();
   const autosave = useAutosaveFile({ path, loaded });
   const [initial] = useState(loaded);
   const [content, setContent] = useState(loaded);
@@ -83,6 +86,24 @@ export function CodeViewFileEditor({
     [path, content],
   );
   useTabFindSource(findSource);
+  useEffect(() => {
+    if (!isActiveTab) return;
+    return observeFileSelection(() => {
+      const selection = codeView.current?.getEditor(path)?.getViewState()
+        .selections?.[0];
+      if (selection === undefined) return undefined;
+      const lines = content.split("\n");
+      const offset = (position: { line: number; character: number }) =>
+        lines
+          .slice(0, position.line)
+          .reduce((total, line) => total + line.length + 1, 0) +
+        position.character;
+      const selectedText = content
+        .slice(offset(selection.start), offset(selection.end))
+        .trim();
+      return selectedText ? { path, text: selectedText } : undefined;
+    });
+  }, [content, isActiveTab, path]);
   const host = useStyles(hostClass);
   const view = useStyles(viewClass);
 

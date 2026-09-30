@@ -17,11 +17,30 @@ export const chatAttachmentSchema = Type.Object({
 });
 
 export type ChatAttachment = Static<typeof chatAttachmentSchema>;
+export const chatReferenceSchema = Type.Object({
+  path: Type.String({ minLength: 1 }),
+  text: Type.Optional(Type.String({ minLength: 1 })),
+});
+export type ChatReference = Static<typeof chatReferenceSchema>;
 export type ChatPrompt = {
   text: string;
   files?: File[];
+  references?: ChatReference[];
   clientMessageId?: string;
 };
+
+export function chatPromptContent(
+  text: string,
+  references: readonly ChatReference[],
+) {
+  if (references.length === 0) return text;
+  const context = references.map(({ path, text: selected }) =>
+    selected === undefined
+      ? `File: ${JSON.stringify(path)}. Read this workspace file if needed.`
+      : `Selected text from ${JSON.stringify(path)}:\n${selected}`,
+  );
+  return `${text}${text ? "\n\n" : ""}Workspace references:\n${context.join("\n\n")}`;
+}
 
 export function validateChatFiles(
   files: readonly Pick<File, "name" | "size">[],
@@ -52,10 +71,12 @@ export function validateChatFiles(
 export function chatPromptTitle(input: {
   text: string;
   files?: readonly { name: string }[];
+  references?: readonly ChatReference[];
 }) {
   return (
     input.text.trim() ||
     input.files?.map((file) => file.name).join(", ") ||
+    input.references?.map((reference) => reference.path).join(", ") ||
     "New session"
   );
 }

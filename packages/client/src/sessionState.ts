@@ -1,5 +1,8 @@
 import { type Static, Type } from "@sinclair/typebox";
-import { chatAttachmentSchema } from "./chatAttachments.js";
+import {
+  chatAttachmentSchema,
+  chatReferenceSchema,
+} from "./chatAttachments.js";
 import {
   connectionRequestKey,
   connectionRequestSchema,
@@ -63,6 +66,7 @@ const usageSchema = Type.Object({
 const userMessageSchema = Type.Object({
   role: Type.Literal("user"),
   attachments: Type.Optional(Type.Array(chatAttachmentSchema)),
+  references: Type.Optional(Type.Array(chatReferenceSchema)),
   displayText: Type.Optional(Type.String()),
   clientMessageId: Type.Optional(Type.String()),
   content: Type.Union([
