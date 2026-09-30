@@ -1243,6 +1243,92 @@ e2eTest(
 );
 
 e2eTest(
+  "opens Markdown links and moves the caret out of a heading with touch taps",
+  async ({ app }) => {
+    const path = "Mobile.md";
+    const url = "https://example.com/mobile-guide";
+    await app.server.rpc.workspace.writeFile({
+      path,
+      content: `# To dos\n\nTap here to edit.\n\n[Guide](${url})`,
+    });
+    await app.page.getByRole("link", { name: path, exact: true }).click();
+    await app.page.setViewportSize({ width: 390, height: 844 });
+    const editor = app.page
+      .getByRole("main", { name: path, exact: true })
+      .getByLabel(path, { exact: true });
+    const opened = await app.observeExternalUrls();
+    const client = await app.page.context().newCDPSession(app.page);
+    await client.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+    const tap = async ({ x, y }: { x: number; y: number }) => {
+      await client.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x, y, id: 1 }],
+      });
+      await client.send("Input.dispatchTouchEvent", {
+        type: "touchEnd",
+        touchPoints: [],
+      });
+    };
+    const linkBox = await editor
+      .getByRole("link", { name: "Guide" })
+      .boundingBox();
+    expect(linkBox).not.toBeNull();
+    await tap({
+      x: linkBox!.x + linkBox!.width / 2,
+      y: linkBox!.y + linkBox!.height / 2,
+    });
+    await expect
+      .poll(async () => await opened.evaluate((urls) => urls))
+      .toEqual([url]);
+    const sourceLink = editor.locator(".markdown-source a");
+    await expect(sourceLink).toBeVisible();
+    const sourceLinkBox = await sourceLink.boundingBox();
+    expect(sourceLinkBox).not.toBeNull();
+    await tap({
+      x: sourceLinkBox!.x + sourceLinkBox!.width / 2,
+      y: sourceLinkBox!.y + sourceLinkBox!.height / 2,
+    });
+    await expect
+      .poll(async () => await opened.evaluate((urls) => urls))
+      .toEqual([url, url]);
+    await opened.dispose();
+
+    const headingBox = await editor.locator("h1").boundingBox();
+    expect(headingBox).not.toBeNull();
+    await tap({
+      x: headingBox!.x + headingBox!.width / 2,
+      y: headingBox!.y + headingBox!.height / 2,
+    });
+    const source = editor.getByRole("textbox", { name: "Markdown syntax" });
+    await expect(source).toHaveText("# To dos");
+    await source.evaluate((element) => {
+      const marker = element.querySelector(".markdown-marker")?.firstChild;
+      if (marker === undefined || marker === null)
+        throw new Error("No heading marker");
+      document.getSelection()?.setBaseAndExtent(marker, 1, marker, 1);
+    });
+    const paragraphPoint = await editor
+      .getByText("Tap here to edit.", { exact: true })
+      .evaluate((target) => {
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        const box = range.getBoundingClientRect();
+        return { x: box.right - 2, y: box.top + box.height / 2 };
+      });
+    await tap(paragraphPoint);
+    await expect(editor.locator(".markdown-source")).toHaveCount(0);
+    await app.page.keyboard.type(" changed");
+    await expect(editor).toContainText("Tap here to edit. changed");
+    await expect
+      .poll(async () => await app.server.rpc.workspace.readFile({ path }))
+      .toContain("Tap here to edit. changed");
+    await client.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+    await client.detach();
+    await app.page.getByRole("tab", { name: path }).click();
+  },
+);
+
+e2eTest(
   "uploads dropped local files, images and nested folders to the workspace",
   async ({ app, harness }) => {
     const local = nodePath.join(harness.paths.root, "local-files");

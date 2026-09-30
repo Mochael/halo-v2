@@ -43,6 +43,11 @@ import {
   useWorkspaceQuery,
 } from "../../api/ApiProvider.js";
 import { draftReferencesQueryKey } from "../chatReferences.js";
+import {
+  clearMessageDraft,
+  useMessageDraft,
+  useMessageDraftKey,
+} from "./useMessageDraft.js";
 
 export function AgentPane({
   sessionId,
@@ -52,6 +57,10 @@ export function AgentPane({
   sessions: SessionSummary[];
 }) {
   const session = useAgentSession(sessionId);
+  const draftKey = useMessageDraftKey({
+    kind: "session",
+    messageId: sessionId,
+  });
   const sessionMeta = sessions.find(
     ({ sessionId: candidateSessionId }) => candidateSessionId === sessionId,
   );
@@ -62,8 +71,8 @@ export function AgentPane({
   });
   return (
     <ChatPane
-      key={sessionId}
       sessionId={sessionId}
+      draftKey={draftKey}
       title={sessionMeta?.title ?? submittedTitle}
       {...session}
     />
@@ -76,13 +85,16 @@ export function DraftAgentPane({ draftId }: { draftId: string }) {
   const initialReferences = queryClient.getQueryData<ChatReference[]>(
     draftReferencesQueryKey(draftId),
   );
+  const draftKey = useMessageDraftKey({ kind: "draft", messageId: draftId });
   const session = useDraftAgentSession((createdSessionId) => {
+    clearMessageDraft(draftKey);
     navigate(`/sessions/${createdSessionId}`);
   });
   return (
     <ChatPane
       draftId={draftId}
       initialReferences={initialReferences}
+      draftKey={draftKey}
       {...session}
       title={session.title ?? "New session"}
     />
@@ -93,6 +105,7 @@ function ChatPane({
   sessionId,
   draftId,
   initialReferences = [],
+  draftKey,
   title,
   state,
   error,
@@ -102,6 +115,7 @@ function ChatPane({
   sessionId: string | undefined;
   draftId?: string;
   initialReferences?: ChatReference[];
+  draftKey: string | undefined;
   title: string | undefined;
   state: SessionSnapshot;
   error: string | undefined;
@@ -109,7 +123,7 @@ function ChatPane({
   abort: () => Promise<void | Error>;
 }) {
   const isActiveTab = useIsActiveTab();
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useMessageDraft(draftKey);
   const [references, setReferences] =
     useState<ChatReference[]>(initialReferences);
   const workspace = useWorkspaceQuery().data;
@@ -122,6 +136,7 @@ function ChatPane({
   const [localError, setLocalError] = useState<string>();
   const [sending, setSending] = useState(false);
   const submitting = useRef<string | undefined>(undefined);
+  const mounted = useRef(true);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
   const picker = useRef<HTMLInputElement>(null);
@@ -143,9 +158,16 @@ function ChatPane({
   const dropOverlay = useStyles(styles.dropOverlay);
   const hasContent =
     draft.trim().length > 0 || attachments.length > 0 || references.length > 0;
-  useRestartWarning(hasContent);
+  useRestartWarning(attachments.length > 0 || references.length > 0);
   const showStop = state.activeRun !== undefined && !hasContent && !sending;
   const displayError = localError ?? error;
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     // The prompt RPC stays open for the model's whole turn. Release the composer
@@ -166,7 +188,7 @@ function ChatPane({
     setDraft("");
     setAttachments([]);
     setReferences([]);
-  }, [state.entries]);
+  }, [state.entries, setDraft]);
 
   function addFiles(files: File[]) {
     if (submitting.current) {
@@ -194,6 +216,7 @@ function ChatPane({
     if (!hasContent || submitting.current) return;
     const clientMessageId = crypto.randomUUID();
     submitting.current = clientMessageId;
+    clearMessageDraft(draftKey);
     setSending(true);
     setLocalError(undefined);
     const result = await prompt({
@@ -205,7 +228,10 @@ function ChatPane({
     if (submitting.current !== clientMessageId) return;
     submitting.current = undefined;
     setSending(false);
-    if (result instanceof Error) return;
+    if (result instanceof Error) {
+      if (mounted.current) setDraft(draft);
+      return;
+    }
     setDraft("");
     setAttachments([]);
     setReferences([]);

@@ -18,7 +18,7 @@ export function confirmRestart() {
   return (
     safe ||
     window.confirm(
-      "You have unsaved edits or message drafts. Cancel to copy them before restarting, or continue and discard them.",
+      "You have unsaved edits or message attachments. Cancel to keep them, or continue and discard them.",
     )
   );
 }

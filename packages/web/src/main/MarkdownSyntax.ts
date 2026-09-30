@@ -113,6 +113,8 @@ class SyntaxController {
   private frame: number | undefined;
   private pointerId: number | undefined;
   private pointerTarget: Element | undefined;
+  private touchStart: { x: number; y: number } | undefined;
+  private touchPosition: number | undefined;
   private composing = false;
   private nextId = 0;
   private suppressedPosition: number | undefined;
@@ -157,6 +159,10 @@ class SyntaxController {
   private pointerDown = (event: PointerEvent) => {
     if (event.button !== 0 || !event.isPrimary) return;
     this.pointerId = event.pointerId;
+    this.touchStart =
+      event.pointerType === "touch"
+        ? { x: event.clientX, y: event.clientY }
+        : undefined;
     this.pointerTarget =
       event.target instanceof Element && this.view.dom.contains(event.target)
         ? event.target
@@ -164,6 +170,7 @@ class SyntaxController {
     if (
       event.target instanceof Node &&
       this.source !== undefined &&
+      event.pointerType !== "touch" &&
       this.view.dom.contains(event.target) &&
       !this.source.contains(event.target)
     ) {
@@ -176,10 +183,30 @@ class SyntaxController {
   private pointerUp = (event: PointerEvent) => {
     if (event.pointerId !== this.pointerId) return;
     this.pointerId = undefined;
+    const touchStart = this.touchStart;
+    this.touchStart = undefined;
+    if (
+      event.type === "pointerup" &&
+      event.pointerType === "touch" &&
+      touchStart !== undefined &&
+      Math.hypot(event.clientX - touchStart.x, event.clientY - touchStart.y) <
+        10 &&
+      this.document.getSelection()?.isCollapsed !== false &&
+      this.source !== undefined &&
+      event.target instanceof Node &&
+      this.view.dom.contains(event.target) &&
+      !this.source.contains(event.target)
+    ) {
+      this.touchPosition = this.view.posAtCoords({
+        left: event.clientX,
+        top: event.clientY,
+      })?.pos;
+    }
     this.schedule();
   };
   private cancelPointer = () => {
     this.pointerId = undefined;
+    this.touchStart = undefined;
     this.schedule();
   };
   private schedule = () => {
@@ -194,6 +221,18 @@ class SyntaxController {
   };
 
   private reconcile() {
+    const touchPosition = this.touchPosition;
+    this.touchPosition = undefined;
+    if (touchPosition !== undefined) {
+      // Touch taps leave the nested source focused. Set and focus the rich
+      // selection together so a later selectionchange cannot restore it.
+      const tr = this.view.state.tr.setMeta(syntaxKey, { active: undefined });
+      tr.setSelection(TextSelection.near(tr.doc.resolve(touchPosition)));
+      this.view.dispatch(tr);
+      this.source = undefined;
+      this.renderedSource = undefined;
+      this.view.focus();
+    }
     if (
       this.view.editable &&
       this.source?.contains(this.document.activeElement)
@@ -203,6 +242,7 @@ class SyntaxController {
     // settled native selection before changing decorations, which can move its DOM.
     const selection = this.document.getSelection();
     if (
+      touchPosition === undefined &&
       this.view.hasFocus() &&
       selection?.anchorNode &&
       selection.focusNode &&
