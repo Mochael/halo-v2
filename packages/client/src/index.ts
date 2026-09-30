@@ -90,9 +90,12 @@ export { imageFilename, imageMediaTypes } from "./imageFilename.js";
 export {
   chatAttachmentLimits,
   chatAttachmentSchema,
+  chatReferenceSchema,
+  chatPromptContent,
   chatPromptTitle,
   validateChatFiles,
   type ChatAttachment,
+  type ChatReference,
   type ChatPrompt,
 } from "./chatAttachments.js";
 export {
