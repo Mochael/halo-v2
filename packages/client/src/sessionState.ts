@@ -1,5 +1,8 @@
 import { type Static, Type } from "@sinclair/typebox";
-import { chatAttachmentSchema, chatReferenceSchema } from "./chatAttachments.js";
+import {
+  chatAttachmentSchema,
+  chatReferenceSchema,
+} from "./chatAttachments.js";
 import {
   connectionRequestKey,
   connectionRequestSchema,

@@ -29,7 +29,10 @@ export type ChatPrompt = {
   clientMessageId?: string;
 };
 
-export function chatPromptContent(text: string, references: readonly ChatReference[]) {
+export function chatPromptContent(
+  text: string,
+  references: readonly ChatReference[],
+) {
   if (references.length === 0) return text;
   const context = references.map(({ path, text: selected }) =>
     selected === undefined
