@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { Extensions } from "@tiptap/core";
+import type { Editor, Extensions } from "@tiptap/core";
 import { Markdown } from "@tiptap/markdown";
 import Placeholder from "@tiptap/extension-placeholder";
 import Paragraph from "@tiptap/extension-paragraph";
@@ -39,6 +39,8 @@ type MarkdownEditorOptions = {
   editable?: boolean;
   "aria-label"?: string;
   onSubmit?: () => void;
+  onSelectionUpdate?: (editor: Editor) => void;
+  onKeyDown?: (event: KeyboardEvent) => boolean;
   inlineCodeClassName?: string;
   extensions?: Extensions;
 };
@@ -52,12 +54,16 @@ export function useMarkdownEditor({
   editable = true,
   "aria-label": ariaLabel = "Editor",
   onSubmit,
+  onSelectionUpdate,
+  onKeyDown,
   inlineCodeClassName,
   extensions = [],
 }: MarkdownEditorOptions) {
   const proseClassName = useStyles(proseHtml(size), syntaxStyle);
   const onChangeRef = useRefCurrent(onChange);
   const onSubmitRef = useRefCurrent(onSubmit);
+  const onSelectionUpdateRef = useRefCurrent(onSelectionUpdate);
+  const onKeyDownRef = useRefCurrent(onKeyDown);
 
   const editor = useEditor({
     extensions: [
@@ -92,6 +98,7 @@ export function useMarkdownEditor({
         class: `maui-editor-prose ${proseClassName}`,
       },
       handleKeyDown: (_view, event) => {
+        if (onKeyDownRef.current?.(event)) return true;
         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
           onSubmitRef.current?.();
@@ -102,7 +109,10 @@ export function useMarkdownEditor({
     },
     onUpdate: ({ editor: current }) => {
       onChangeRef.current?.(serializeMarkdown({ editor: current }));
+      onSelectionUpdateRef.current?.(current);
     },
+    onSelectionUpdate: ({ editor: current }) =>
+      onSelectionUpdateRef.current?.(current),
   });
 
   useEffect(() => {
