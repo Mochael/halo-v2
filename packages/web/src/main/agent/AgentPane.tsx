@@ -37,6 +37,11 @@ import { Editor } from "./Editor.tsx";
 import { ExecutorConnectionCard } from "./ExecutorConnectionCard.tsx";
 import { ToolActivity } from "./ToolActivity.tsx";
 import { useTabFindSource } from "../../panes/TabFind.js";
+import {
+  clearMessageDraft,
+  useMessageDraft,
+  useMessageDraftKey,
+} from "./useMessageDraft.js";
 
 export function AgentPane({
   sessionId,
@@ -46,6 +51,10 @@ export function AgentPane({
   sessions: SessionSummary[];
 }) {
   const session = useAgentSession(sessionId);
+  const draftKey = useMessageDraftKey({
+    kind: "session",
+    messageId: sessionId,
+  });
   const sessionMeta = sessions.find(
     ({ sessionId: candidateSessionId }) => candidateSessionId === sessionId,
   );
@@ -56,8 +65,8 @@ export function AgentPane({
   });
   return (
     <ChatPane
-      key={sessionId}
       sessionId={sessionId}
+      draftKey={draftKey}
       title={sessionMeta?.title ?? submittedTitle}
       {...session}
     />
@@ -66,12 +75,15 @@ export function AgentPane({
 
 export function DraftAgentPane({ draftId }: { draftId: string }) {
   const [, navigate] = useLocation();
+  const draftKey = useMessageDraftKey({ kind: "draft", messageId: draftId });
   const session = useDraftAgentSession((createdSessionId) => {
+    clearMessageDraft(draftKey);
     navigate(`/sessions/${createdSessionId}`);
   });
   return (
     <ChatPane
       draftId={draftId}
+      draftKey={draftKey}
       {...session}
       title={session.title ?? "New session"}
     />
@@ -81,6 +93,7 @@ export function DraftAgentPane({ draftId }: { draftId: string }) {
 function ChatPane({
   sessionId,
   draftId,
+  draftKey,
   title,
   state,
   error,
@@ -89,6 +102,7 @@ function ChatPane({
 }: {
   sessionId: string | undefined;
   draftId?: string;
+  draftKey: string | undefined;
   title: string | undefined;
   state: SessionSnapshot;
   error: string | undefined;
@@ -96,13 +110,14 @@ function ChatPane({
   abort: () => Promise<void | Error>;
 }) {
   const isActiveTab = useIsActiveTab();
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useMessageDraft(draftKey);
   const [attachments, setAttachments] = useState<{ id: string; file: File }[]>(
     [],
   );
   const [localError, setLocalError] = useState<string>();
   const [sending, setSending] = useState(false);
   const submitting = useRef<string | undefined>(undefined);
+  const mounted = useRef(true);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
   const picker = useRef<HTMLInputElement>(null);
@@ -122,9 +137,16 @@ function ChatPane({
   const progress = useStyles(styles.progress);
   const dropOverlay = useStyles(styles.dropOverlay);
   const hasContent = draft.trim().length > 0 || attachments.length > 0;
-  useRestartWarning(hasContent);
+  useRestartWarning(attachments.length > 0);
   const showStop = state.activeRun !== undefined && !hasContent && !sending;
   const displayError = localError ?? error;
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     // The prompt RPC stays open for the model's whole turn. Release the composer
@@ -144,7 +166,7 @@ function ChatPane({
     setSending(false);
     setDraft("");
     setAttachments([]);
-  }, [state.entries]);
+  }, [state.entries, setDraft]);
 
   function addFiles(files: File[]) {
     if (submitting.current) {
@@ -172,6 +194,7 @@ function ChatPane({
     if (!hasContent || submitting.current) return;
     const clientMessageId = crypto.randomUUID();
     submitting.current = clientMessageId;
+    clearMessageDraft(draftKey);
     setSending(true);
     setLocalError(undefined);
     const result = await prompt({
@@ -182,7 +205,10 @@ function ChatPane({
     if (submitting.current !== clientMessageId) return;
     submitting.current = undefined;
     setSending(false);
-    if (result instanceof Error) return;
+    if (result instanceof Error) {
+      if (mounted.current) setDraft(draft);
+      return;
+    }
     setDraft("");
     setAttachments([]);
   }

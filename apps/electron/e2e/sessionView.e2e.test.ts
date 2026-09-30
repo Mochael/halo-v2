@@ -532,6 +532,61 @@ e2eTest("starts a new session", async ({ harness, app }) => {
 });
 
 e2eTest(
+  "keeps unsent text with each session after navigation and reload",
+  async ({ harness, app, llm }) => {
+    for (const title of ["First draft session", "Second draft session"]) {
+      await harness.loadSession({
+        title,
+        messages: [m.user(title), m.assistant("Saved reply")],
+      });
+    }
+    const sidebar = app.page.getByRole("navigation", { name: "Workspace" });
+    const first = sidebar.getByRole("link", {
+      name: "First draft session",
+      exact: true,
+    });
+    const second = sidebar.getByRole("link", {
+      name: "Second draft session",
+      exact: true,
+    });
+    const editor = app.page.getByRole("main").getByLabel("Message", {
+      exact: true,
+    });
+
+    await first.click();
+    await editor.fill("Only the first session should show this draft");
+    await second.click();
+    await expect(editor).toHaveText("");
+    await editor.fill("Send this from the second session");
+    await first.click();
+    await expect(editor).toHaveText(
+      "Only the first session should show this draft",
+    );
+
+    await app.page.reload();
+    await expect(editor).toHaveText(
+      "Only the first session should show this draft",
+    );
+    await second.click();
+    await expect(editor).toHaveText("Send this from the second session");
+    await app.page
+      .getByRole("main")
+      .getByRole("button", { name: "Send" })
+      .click();
+    await llm.respond(m.assistant("Sent."));
+    await expect(editor).toHaveText("");
+    await app.page.reload();
+    await expect(editor).toHaveText("");
+    await first.click();
+    await expect(editor).toHaveText(
+      "Only the first session should show this draft",
+    );
+    await second.click();
+    await expect(editor).toHaveText("");
+  },
+);
+
+e2eTest(
   "keeps the selected session and draft pages after reload",
   async ({ harness, app }) => {
     for (const title of ["Earlier conversation", "Latest conversation"]) {
@@ -557,8 +612,14 @@ e2eTest(
       exact: true,
     });
     await expect(draft).toBeVisible();
+    await draft
+      .getByLabel("Message", { exact: true })
+      .fill("Unsent new session");
     await app.page.reload();
     await expect(draft).toBeVisible();
+    await expect(draft.getByLabel("Message", { exact: true })).toHaveText(
+      "Unsent new session",
+    );
   },
 );
 
