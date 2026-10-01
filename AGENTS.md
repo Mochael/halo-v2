@@ -47,7 +47,7 @@ GCP infrastructure lives in `infra/control-plane/` and `infra/workspace/` (Pulum
 
 Headless hosts (Xvfb/VNC) need `HALO_USE_SWIFTSHADER=1`, which the `halo-dev` terminal exports. Without it the renderer cannot start WebGL.
 
-To chat with a model, authenticate to GCP with Application Default Credentials. The workspace server uses its ADC identity to call `google-vertex/gemini-3.8-flash` in project `halo-relay`; production VMs receive that access through their attached service accounts.
+To chat with a model, authenticate to GCP with Application Default Credentials. The workspace server reads `together-ai-api-key` from Secret Manager in project `halo-relay` and uses Pi’s `together/deepseek-ai/DeepSeek-V4.1-Flash` model. Production VMs read the same secret through their attached service accounts.
 
 Electron development mode also uses the active ADC principal as its local UI identity, so it does not open browser Google sign-in. User ADC appears as that Google user and service-account ADC appears as the service account email. Packaged builds and the browser app still use Better Auth with Google sign-in.
 

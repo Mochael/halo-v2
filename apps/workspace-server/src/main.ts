@@ -17,10 +17,7 @@ import {
   FileCredentialVault,
   WorkspaceServer,
 } from "@get-halo/workspace-server";
-import {
-  createOpenAILLMApi,
-  createPiLLMApi,
-} from "@get-halo/workspace-server/llm";
+import { createOpenAILLMApi } from "@get-halo/workspace-server/llm";
 import { GoogleAuth } from "google-auth-library";
 import * as errore from "errore";
 
@@ -50,11 +47,7 @@ async function run() {
         }),
     );
   if (created instanceof Error) return created;
-  const llmApi =
-    applicationConfig.inference.backend === "openAI"
-      ? createOpenAILLMApi(applicationConfig.inference.options)
-      : await createPiLLMApi(applicationConfig.inference.options);
-  if (llmApi instanceof Error) return llmApi;
+  const llmApi = createOpenAILLMApi(applicationConfig.inference.options);
   const logger = new Logger({
     sinks: [
       new JsonlLoggerSink({ filePath: applicationConfig.server.logFilePath }),

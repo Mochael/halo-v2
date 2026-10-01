@@ -19,14 +19,9 @@ const googleClientIdSecretId = `${name}-control-plane-google-client-id`;
 const googleClientSecretId = `${name}-control-plane-google-client-secret`;
 const googleWebClientIdSecretId = "halo-workspace-google-web-client-id";
 const googleWebClientSecretId = "halo-workspace-google-web-client-secret";
+const togetherApiKeySecretId = "together-ai-api-key";
 const controlPlaneDomain = configuration.require("controlPlaneDomain");
 const controlPlaneOrigin = `https://${controlPlaneDomain}`;
-
-const vertexAi = new gcp.projects.Service("vertex-ai", {
-  project,
-  service: "aiplatform.googleapis.com",
-  disableOnDestroy: false,
-});
 
 const network = new gcp.compute.Network("network", {
   name,
@@ -160,14 +155,14 @@ const workspaceLogAccess = new gcp.projects.IAMMember("workspace-logs", {
   role: "roles/logging.logWriter",
   member: pulumi.interpolate`serviceAccount:${workspaceRuntime.email}`,
 });
-const workspaceInferenceAccess = new gcp.projects.IAMMember(
+const workspaceInferenceAccess = new gcp.secretmanager.SecretIamMember(
   "workspace-inference",
   {
     project,
-    role: "roles/aiplatform.user",
+    secretId: togetherApiKeySecretId,
+    role: "roles/secretmanager.secretAccessor",
     member: pulumi.interpolate`serviceAccount:${workspaceRuntime.email}`,
   },
-  { dependsOn: [vertexAi] },
 );
 const workspaceGoogleWebClientIdAccess = new gcp.secretmanager.SecretIamMember(
   "workspace-google-web-client-id",
