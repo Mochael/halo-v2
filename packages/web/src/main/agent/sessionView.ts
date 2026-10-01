@@ -19,8 +19,11 @@ export type SessionViewItem =
       kind: "user";
       id: string;
       text: string;
-      attachments: ChatAttachment[];
+      attachments: Array<
+        Pick<ChatAttachment, "name"> & Partial<Pick<ChatAttachment, "path">>
+      >;
       references: ChatReference[];
+      pending?: true;
     }
   | {
       kind: "bashExecution";
