@@ -66,7 +66,8 @@ gcloud compute instances add-metadata "$INSTANCE" \
 
 ssh_args=(--project="$PROJECT" --zone="$ZONE" --tunnel-through-iap --quiet
   --ssh-key-file="$RUNNER_TEMP/workspace-ssh" --ssh-key-expire-after=30m
-  --ssh-flag=-oConnectTimeout=10)
+  --ssh-flag=-oConnectTimeout=10
+  --ssh-flag=-oServerAliveInterval=30 --ssh-flag=-oServerAliveCountMax=10)
 if [ -n "$action" ]; then
   # A stopped VM must boot with the desired metadata, rather than the old release.
   gcloud compute instances "$action" "$INSTANCE" \
