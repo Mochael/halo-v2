@@ -49,7 +49,7 @@ export function createHarnessTools(
     },
   });
   return {
-    ...remote,
+    files: remote.files,
     bash: {
       async run(input) {
         const result = await remote.bash.run(input);

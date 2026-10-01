@@ -135,6 +135,9 @@ function ChatPane({
   );
   const [localError, setLocalError] = useState<string>();
   const [sending, setSending] = useState(false);
+  const [optimisticMessage, setOptimisticMessage] = useState<
+    Extract<SessionViewItem, { kind: "user" }> | undefined
+  >();
   const submitting = useRef<string | undefined>(undefined);
   const mounted = useRef(true);
   const [dragging, setDragging] = useState(false);
@@ -161,6 +164,16 @@ function ChatPane({
   useRestartWarning(attachments.length > 0 || references.length > 0);
   const showStop = state.activeRun !== undefined && !hasContent && !sending;
   const displayError = localError ?? error;
+  const visibleOptimisticMessage =
+    optimisticMessage !== undefined &&
+    state.entries.some(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "user" &&
+        entry.message.clientMessageId === optimisticMessage.id,
+    )
+      ? undefined
+      : optimisticMessage;
 
   useEffect(() => {
     mounted.current = true;
@@ -185,6 +198,7 @@ function ChatPane({
       return;
     submitting.current = undefined;
     setSending(false);
+    setOptimisticMessage(undefined);
     setDraft("");
     setAttachments([]);
     setReferences([]);
@@ -215,21 +229,44 @@ function ChatPane({
   async function submit() {
     if (!hasContent || submitting.current) return;
     const clientMessageId = crypto.randomUUID();
+    const submittedDraft = draft;
+    const submittedAttachments = attachments;
+    const submittedReferences = references;
     submitting.current = clientMessageId;
     clearMessageDraft(draftKey);
     setSending(true);
     setLocalError(undefined);
+    if (state.activeRun !== undefined) {
+      setOptimisticMessage({
+        kind: "user",
+        id: clientMessageId,
+        text: submittedDraft.trim(),
+        attachments: submittedAttachments.map(({ file }) => ({
+          name: file.name,
+        })),
+        references: submittedReferences,
+        pending: true,
+      });
+      setDraft("");
+      setAttachments([]);
+      setReferences([]);
+    }
     const result = await prompt({
-      text: draft.trim(),
-      files: attachments.map((item) => item.file),
-      references,
+      text: submittedDraft.trim(),
+      files: submittedAttachments.map((item) => item.file),
+      references: submittedReferences,
       clientMessageId,
     });
     if (submitting.current !== clientMessageId) return;
     submitting.current = undefined;
     setSending(false);
     if (result instanceof Error) {
-      if (mounted.current) setDraft(draft);
+      if (mounted.current) {
+        setOptimisticMessage(undefined);
+        setDraft(submittedDraft);
+        setAttachments(submittedAttachments);
+        setReferences(submittedReferences);
+      }
       return;
     }
     setDraft("");
@@ -290,7 +327,11 @@ function ChatPane({
       <div className={body}>
         <div className={column}>
           {draftId === undefined || state.entries.length > 0 ? (
-            <SessionView state={state} sessionId={sessionId} />
+            <SessionView
+              state={state}
+              sessionId={sessionId}
+              optimisticMessage={visibleOptimisticMessage}
+            />
           ) : undefined}
           <Editor
             autoFocus={isActiveTab}
@@ -444,9 +485,11 @@ function ChatPane({
 function SessionView({
   state,
   sessionId,
+  optimisticMessage,
 }: {
   state: SessionSnapshot;
   sessionId: string | undefined;
+  optimisticMessage: Extract<SessionViewItem, { kind: "user" }> | undefined;
 }) {
   const viewRef = useRef<HTMLDivElement>(null);
   const activeFindRange = useRef<Range | undefined>(undefined);
@@ -571,6 +614,13 @@ function SessionView({
       {items.map((item) => (
         <SessionViewRow key={item.id} item={item} sessionId={sessionId} />
       ))}
+      {optimisticMessage === undefined ? undefined : (
+        <SessionViewRow
+          key={optimisticMessage.id}
+          item={optimisticMessage}
+          sessionId={sessionId}
+        />
+      )}
       {showStopped ? (
         <span className={stopped} role="status">
           Stopped
@@ -588,7 +638,12 @@ function SessionViewRow({
   sessionId: string | undefined;
 }) {
   const userRow = useStyles(styles.userRow);
-  const userMessage = useStyles(styles.userMessage);
+  const userMessage = useStyles(
+    styles.userMessage,
+    item.kind === "user" && item.pending
+      ? styles.pendingUserMessage
+      : undefined,
+  );
   const body = useStyles(styles.messageBody);
   const assistantRow = useStyles(styles.assistantRow);
   const assistantMessage = useStyles(styles.assistantMessage);
@@ -603,7 +658,11 @@ function SessionViewRow({
   if (item.kind === "user") {
     return (
       <div className={userRow}>
-        <article className={userMessage} aria-label="You message">
+        <article
+          className={userMessage}
+          aria-label="You message"
+          aria-busy={item.pending}
+        >
           {item.text.length > 0 ? (
             <div className={body} data-find-segment={item.id}>
               {item.text}
@@ -612,16 +671,25 @@ function SessionViewRow({
           {item.attachments.length > 0 ? (
             <ul className={attachmentList} aria-label="Attached files">
               {item.attachments.map((attachment) => (
-                <li key={attachment.path}>
-                  <Link
-                    href={`/files/${attachment.path.split("/").map(encodeURIComponent).join("/")}`}
-                    className={attachmentChip}
-                  >
-                    <FileText size="sm" aria-hidden="true" />
-                    <span className={attachmentName} title={attachment.name}>
-                      {attachment.name}
+                <li key={attachment.path ?? attachment.name}>
+                  {attachment.path === undefined ? (
+                    <span className={attachmentChip}>
+                      <FileText size="sm" aria-hidden="true" />
+                      <span className={attachmentName} title={attachment.name}>
+                        {attachment.name}
+                      </span>
                     </span>
-                  </Link>
+                  ) : (
+                    <Link
+                      href={`/files/${attachment.path.split("/").map(encodeURIComponent).join("/")}`}
+                      className={attachmentChip}
+                    >
+                      <FileText size="sm" aria-hidden="true" />
+                      <span className={attachmentName} title={attachment.name}>
+                        {attachment.name}
+                      </span>
+                    </Link>
+                  )}
                 </li>
               ))}
             </ul>
@@ -838,6 +906,7 @@ const styles = {
     minWidth: 0,
     backgroundColor: colors.gray[3],
   }),
+  pendingUserMessage: style({ opacity: 0.6 }),
   assistantRow: style(flex({ direction: "column", gap: 6 }), {
     minWidth: 0,
     width: "100%",
