@@ -4,10 +4,14 @@ import { AgentPane, DraftAgentPane } from "./agent/AgentPane.tsx";
 import { FilePane } from "./FilePane.tsx";
 import { ExtensionPane } from "./ExtensionPane.js";
 import { RoutinePane } from "./RoutinePane.js";
+import { DesktopPane } from "./DesktopPane.js";
 
 export function MainPane({ sessions }: { sessions: SessionSummary[] }) {
   return (
     <Switch>
+      <Route path="/desktop">
+        <DesktopPane />
+      </Route>
       <Route path="/extensions/:extensionId">
         {(params) => (
           <ExtensionPane extensionId={decodeURIComponent(params.extensionId)} />

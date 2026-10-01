@@ -32,6 +32,7 @@ export interface HostApi {
     canRequest: (path: string[]) => boolean;
   }): Promise<HaloClient | Error | undefined>;
   getExtensionFrameUrl(extensionId: string): string;
+  getDesktopFrameUrl(): string;
   getAppInfo?(): Promise<AppInfo | Error>;
   checkForAppUpdate?(): Promise<void | Error>;
   installAppUpdate?(): Promise<void | Error>;

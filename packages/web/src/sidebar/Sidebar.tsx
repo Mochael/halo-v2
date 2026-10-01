@@ -11,7 +11,7 @@ import {
   spacing,
   text,
 } from "maui";
-import { Close } from "maui/icons";
+import { Close, Monitor } from "maui/icons";
 import { style, useStyles } from "purse-styles";
 import { useMutation } from "@tanstack/react-query";
 import type { SessionSummary } from "@get-halo/client";
@@ -23,6 +23,7 @@ import { ExtensionsSection } from "./ExtensionsSection.js";
 import { ScheduledSection } from "./ScheduledSection.js";
 import { NavigationSidebar } from "./navigation/NavigationSidebar.js";
 import { sidebarPadding } from "./navigation/SidebarSection.js";
+import { SidebarItem } from "./navigation/SidebarItem.js";
 
 type SidebarProps = {
   sessions: SessionSummary[];
@@ -57,6 +58,14 @@ export function Sidebar({ sessions, appInfo }: SidebarProps) {
         <div className={titleBar} aria-hidden="true" />
       )}
       <NavigationSidebar aria-label="Workspace" className={navigation}>
+        <SidebarItem
+          id="desktop"
+          href="/desktop"
+          pageTitle="Desktop"
+          icon={Monitor}
+        >
+          Desktop
+        </SidebarItem>
         <ScheduledSection />
         <ExtensionsSection />
         <FilesystemSection />

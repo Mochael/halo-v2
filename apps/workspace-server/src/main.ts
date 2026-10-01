@@ -83,6 +83,7 @@ async function run() {
       testApiEnabled: applicationConfig.mode === ApplicationMode.Test,
       traceWorkspaceId: applicationConfig.server.traceUpload?.workspaceId,
       gateway: applicationConfig.server.gateway,
+      desktopOrigin: process.env.HALO_DESKTOP_ORIGIN,
       cliEntry: applicationConfig.server.cliEntry,
       cliNodeExecutable: applicationConfig.server.cliNodeExecutable,
       cliElectronRunAsNode: applicationConfig.server.cliElectronRunAsNode,

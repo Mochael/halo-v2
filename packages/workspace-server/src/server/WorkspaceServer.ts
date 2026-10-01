@@ -53,6 +53,7 @@ export type WorkspaceServerConfig = {
   testApiEnabled?: boolean;
   traceWorkspaceId?: string;
   gateway?: WorkspaceGatewayIdentity;
+  desktopOrigin?: string;
   cliEntry?: string;
   cliNodeExecutable?: string;
   cliElectronRunAsNode?: boolean;
@@ -335,6 +336,7 @@ export class WorkspaceServer {
       },
       corsOrigins: config.corsOrigins,
       gateway: config.gateway,
+      desktopOrigin: config.desktopOrigin,
     });
     cleanup.defer(async () => await requests.close());
     await extensions.reload();
