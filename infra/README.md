@@ -72,9 +72,37 @@ The load balancer's static IP address is also protected in Pulumi.
 
 Normal production changes ship through a release PR created by
 `pnpm prerelease <version>`. CI previews this stack on the PR. Merging builds the
-versioned images, applies the stack, recreates workspace VMs with their durable
-data disks, and publishes the desktop release. The local commands above remain
+versioned images, applies the stack, updates containers on the existing workspace
+VMs, and publishes the desktop release. The local commands above remain
 available for recovery and infrastructure development.
+
+## Workspace image rollout
+
+The release matrix runs `infra/workspace/rollout.sh` for each running workspace.
+It checks workspace identity, the durable disk, and the template's machine,
+network, tags, and service account. A mismatch stops publishing and requires
+explicit VM maintenance; image rollout does not change those host settings or
+the boot OS.
+
+The script updates VM metadata with the desired startup script, preserving owner
+and workspace identity, then reruns it over IAP SSH. The startup script pulls the
+new image before changing the service and restarting only the container. The VM,
+private IP, mounted disk, and Docker cache stay in place. Healthy retries report
+readiness without restarting. After the replacement is healthy, the previous
+image is removed to keep release images from filling the boot disk. If pulling
+fails, the existing container continues serving; the desired metadata remains
+available for a retry or reboot.
+
+The workflow requires a fresh readiness marker with the exact image, supported
+protocols, and revision before browser or desktop publishing. A container startup
+or health failure blocks publishing; automatic rollback and draining active agent
+runs are not implemented. The restart still briefly interrupts active work.
+
+The `deploymentServiceAccount` stack setting must match
+`GCP_DEPLOY_SERVICE_ACCOUNT` in GitHub. Pulumi manages OS Admin Login, IAP access
+restricted to SSH, and access to the workspace runtime service account. Existing
+IAP firewall rules keep SSH reachable through IAP while workspace ports stay
+private.
 
 ## Bootstrap resources
 

@@ -24,6 +24,20 @@ if ! command -v docker >/dev/null; then
 fi
 systemctl enable --now docker
 
+previous_image=$(docker inspect --format '{{.Config.Image}}' halo-workspace 2>/dev/null || true)
+# Download while the old container still serves users, before changing its service.
+curl -fsS -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token | jq -r .access_token | docker login --username oauth2accesstoken --password-stdin https://${ctx.registry}
+docker pull ${ctx.image}
+
+# A workflow retry or VM boot can reuse an already healthy release.
+if [ "$(docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' halo-workspace 2>/dev/null || true)" = "${ctx.image} healthy" ]; then
+  status=$(docker exec halo-workspace node --import /opt/halo/node_modules/tsx/dist/loader.mjs /opt/halo/packages/halo-cli/src/cli.ts status --json)
+  protocols=$(jq -cer '.supportedProtocols // [.protocolVersion]' <<< "$status")
+  revision=$(jq -er '.build.revision' <<< "$status")
+  echo "HALO_WORKSPACE_READY image=${ctx.image} protocols=$protocols revision=$revision"
+  exit 0
+fi
+
 disk=/dev/disk/by-id/google-halo-workspace
 # GCP attaches new disks without a filesystem; never reformat an existing workspace.
 if ! blkid "$disk" >/dev/null; then
@@ -46,15 +60,6 @@ mkdir -p /mnt/halo/workspace
 chown 1000:1000 /mnt/halo/workspace
 mkdir -p /mnt/halo/workspace/documents
 chown 1000:1000 /mnt/halo/workspace/documents
-
-cat > /usr/local/bin/halo-workspace-pull <<'PULL'
-#!/usr/bin/env bash
-set -euo pipefail
-
-curl -fsS -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token | jq -r .access_token | docker login --username oauth2accesstoken --password-stdin https://${ctx.registry}
-docker pull ${ctx.image}
-PULL
-chmod 0755 /usr/local/bin/halo-workspace-pull
 
 cat > /usr/local/bin/halo-workspace-config <<'CONFIG'
 #!/usr/bin/env bash
@@ -104,7 +109,6 @@ Restart=on-failure
 RestartSec=5
 TimeoutStartSec=600
 TimeoutStopSec=45
-ExecStartPre=/usr/local/bin/halo-workspace-pull
 ExecStartPre=/usr/local/bin/halo-workspace-config
 ExecStart=/usr/bin/docker run --rm --name halo-workspace --network host --init --shm-size=1g --volume /mnt/halo/workspace:/home/node ${ctx.image} /home/node/.halo/workspace-server.json
 ExecStop=/usr/bin/docker stop --time 30 halo-workspace
@@ -113,7 +117,6 @@ WantedBy=multi-user.target
 SERVICE
 systemctl daemon-reload
 systemctl enable halo
-/usr/local/bin/halo-workspace-pull
 systemctl restart halo
 
 for attempt in $(seq 1 120); do
@@ -122,6 +125,12 @@ for attempt in $(seq 1 120); do
       status=$(docker exec halo-workspace node --import /opt/halo/node_modules/tsx/dist/loader.mjs /opt/halo/packages/halo-cli/src/cli.ts status --json)
       protocols=$(jq -cer '.supportedProtocols // [.protocolVersion]' <<< "$status")
       revision=$(jq -er '.build.revision // "unknown"' <<< "$status")
+      # Keep the running release cached without accumulating superseded images.
+      if [ -n "$previous_image" ] && [ "$previous_image" != "${ctx.image}" ]; then
+        if ! docker image rm "$previous_image"; then
+          echo "Could not remove superseded workspace image $previous_image" >&2
+        fi
+      fi
       echo "HALO_WORKSPACE_READY image=${ctx.image} protocols=$protocols revision=$revision"
       exit 0
     fi

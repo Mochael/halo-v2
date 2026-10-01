@@ -15,6 +15,9 @@ const databaseUserName = "halo";
 const controlPlaneServiceName = `${name}-control-plane`;
 const controlPlaneImage = configuration.require("controlPlaneImage");
 const workspaceImage = configuration.require("workspaceImage");
+const deploymentServiceAccount = configuration.require(
+  "deploymentServiceAccount",
+);
 const googleClientIdSecretId = `${name}-control-plane-google-client-id`;
 const googleClientSecretId = `${name}-control-plane-google-client-secret`;
 const googleWebClientIdSecretId = "halo-workspace-google-web-client-id";
@@ -202,6 +205,26 @@ const workspaceServiceAccountAccess = new gcp.serviceaccount.IAMMember(
     member: pulumi.interpolate`serviceAccount:${runtime.email}`,
   },
 );
+
+new gcp.projects.IAMMember("deployment-workspace-os-login", {
+  project,
+  role: "roles/compute.osAdminLogin",
+  member: `serviceAccount:${deploymentServiceAccount}`,
+});
+new gcp.projects.IAMMember("deployment-workspace-iap", {
+  project,
+  role: "roles/iap.tunnelResourceAccessor",
+  member: `serviceAccount:${deploymentServiceAccount}`,
+  condition: {
+    title: "workspace-ssh",
+    expression: "destination.port == 22",
+  },
+});
+new gcp.serviceaccount.IAMMember("deployment-workspace-service-account", {
+  serviceAccountId: workspaceRuntime.name,
+  role: "roles/iam.serviceAccountUser",
+  member: `serviceAccount:${deploymentServiceAccount}`,
+});
 
 const workspaceTemplate = new gcp.compute.InstanceTemplate(
   "workspace-template",
