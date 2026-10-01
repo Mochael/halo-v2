@@ -7,10 +7,17 @@ template_details=$(gcloud compute instance-templates describe "${TEMPLATE##*/}" 
   --project="$PROJECT" --format=json)
 details=$(gcloud compute instances describe "$INSTANCE" \
   --project="$PROJECT" --zone="$ZONE" --format=json)
-if [ "$(jq -r .status <<< "$details")" != "RUNNING" ]; then
-  echo "$INSTANCE must be running before updating its container" >&2
-  exit 1
-fi
+status=$(jq -r .status <<< "$details")
+action=""
+case "$status" in
+  RUNNING) ;;
+  TERMINATED) action=start ;;
+  SUSPENDED) action=resume ;;
+  *)
+    echo "$INSTANCE cannot be updated while $status; retry after its state transition completes" >&2
+    exit 1
+    ;;
+esac
 workspace_id=$(jq -er '.metadata.items[] | select(.key == "halo-workspace-id") | .value' <<< "$details")
 workspace_label=$(jq -r '.labels["halo-workspace-id"] // empty' <<< "$details")
 if [ -n "$workspace_label" ] && [ "$workspace_label" != "$workspace_id" ]; then
@@ -57,12 +64,33 @@ gcloud compute instances add-metadata "$INSTANCE" \
   --project="$PROJECT" --zone="$ZONE" \
   --metadata="$metadata_csv" --metadata-from-file="startup-script=$startup_script"
 
+ssh_args=(--project="$PROJECT" --zone="$ZONE" --tunnel-through-iap --quiet
+  --ssh-key-file="$RUNNER_TEMP/workspace-ssh" --ssh-key-expire-after=30m
+  --ssh-flag=-oConnectTimeout=10)
+if [ -n "$action" ]; then
+  # A stopped VM must boot with the desired metadata, rather than the old release.
+  gcloud compute instances "$action" "$INSTANCE" \
+    --project="$PROJECT" --zone="$ZONE" --quiet
+  ssh_ready=false
+  for attempt in $(seq 1 60); do
+    if gcloud compute ssh "$INSTANCE" "${ssh_args[@]}" --command=true \
+      > "$RUNNER_TEMP/workspace-ssh.log" 2>&1; then
+      ssh_ready=true
+      break
+    fi
+    sleep 5
+  done
+  if [ "$ssh_ready" != true ]; then
+    cat "$RUNNER_TEMP/workspace-ssh.log" >&2
+    echo "$INSTANCE did not become reachable over SSH after $action" >&2
+    exit 1
+  fi
+fi
+
 # Updating metadata does not run it immediately. Execute the same boot entry point
 # over private IAP SSH; its pull completes before it restarts the container.
 output="$RUNNER_TEMP/workspace-update.log"
-gcloud compute ssh "$INSTANCE" \
-  --project="$PROJECT" --zone="$ZONE" --tunnel-through-iap --quiet \
-  --ssh-key-file="$RUNNER_TEMP/workspace-ssh" --ssh-key-expire-after=30m \
+gcloud compute ssh "$INSTANCE" "${ssh_args[@]}" \
   --command='sudo google_metadata_script_runner startup' 2>&1 | tee "$output"
 protocols=$(jq -c .protocols.workspace.supported "releases/$VERSION.json")
 ready_marker="HALO_WORKSPACE_READY image=$WORKSPACE_IMAGE protocols=$protocols revision=$GITHUB_SHA"

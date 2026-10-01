@@ -78,7 +78,7 @@ available for recovery and infrastructure development.
 
 ## Workspace image rollout
 
-The release matrix runs `infra/workspace/rollout.sh` for each running workspace.
+The release matrix runs `infra/workspace/rollout.sh` for each workspace.
 It checks workspace identity, the durable disk, and the template's machine,
 network, tags, and service account. A mismatch stops publishing and requires
 explicit VM maintenance; image rollout does not change those host settings or
@@ -103,6 +103,12 @@ The `deploymentServiceAccount` stack setting must match
 restricted to SSH, and access to the workspace runtime service account. Existing
 IAP firewall rules keep SSH reachable through IAP while workspace ports stay
 private.
+
+Stopped and suspended workspaces receive the desired metadata before the rollout
+starts or resumes them. The rollout waits for SSH, then verifies readiness as
+usual. Startup uses a VM-local lock so automatic boot startup and the release's
+SSH invocation cannot change the service concurrently. Other transitional VM
+states require retrying after the transition completes.
 
 ## Bootstrap resources
 

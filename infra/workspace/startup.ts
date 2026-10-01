@@ -18,6 +18,10 @@ workspace_id=$(curl -fsS -H "Metadata-Flavor: Google" http://metadata.google.int
   return `#!/usr/bin/env bash
 set -euo pipefail
 
+# Boot and release SSH can invoke startup together; serialize their service writes.
+exec 9>/run/halo-workspace-startup.lock
+flock 9
+
 if ! command -v docker >/dev/null; then
   apt-get update
   apt-get install -y docker.io curl jq
