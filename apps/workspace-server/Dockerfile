@@ -10,15 +10,31 @@ RUN apt-get update \
 RUN npm install --global pnpm@12.1.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
-COPY packages ./packages
-COPY apps/workspace-server ./apps/workspace-server
+COPY apps/workspace-server/pdf-requirements.txt ./apps/workspace-server/pdf-requirements.txt
 RUN python3 -m venv /opt/halo/.venv \
     && /opt/halo/.venv/bin/pip install --no-cache-dir --requirement apps/workspace-server/pdf-requirements.txt
+# Keep workspace manifests in the dependency layer; copy sources after installation.
+COPY packages/app-control/package.json ./packages/app-control/package.json
+COPY packages/client/package.json ./packages/client/package.json
+COPY packages/config/package.json ./packages/config/package.json
+COPY packages/copy-path-to-symbol/package.json ./packages/copy-path-to-symbol/package.json
+COPY packages/dev-cli/package.json ./packages/dev-cli/package.json
+COPY packages/extension-sdk/package.json ./packages/extension-sdk/package.json
+COPY packages/extension-tools/package.json ./packages/extension-tools/package.json
+COPY packages/halo-cli/package.json ./packages/halo-cli/package.json
+COPY packages/logger/package.json ./packages/logger/package.json
+COPY packages/shared/package.json ./packages/shared/package.json
+COPY packages/typescript-config/package.json ./packages/typescript-config/package.json
+COPY packages/web/package.json ./packages/web/package.json
+COPY packages/workspace-server/package.json ./packages/workspace-server/package.json
+COPY apps/workspace-server/package.json ./apps/workspace-server/package.json
 RUN pnpm install --frozen-lockfile
 ARG PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false
+RUN pnpm exec playwright install --with-deps chromium --no-shell
+COPY packages ./packages
+COPY apps/workspace-server ./apps/workspace-server
 RUN pnpm --filter @get-halo/extension-sdk run build \
-    && pnpm --filter @get-halo/extension-tools run build \
-    && pnpm exec playwright install --with-deps chromium --no-shell
+    && pnpm --filter @get-halo/extension-tools run build
 # The workspace CLI builds and packs the local SDK when authoring extensions.
 RUN chown -R node:node /opt/halo/packages
 

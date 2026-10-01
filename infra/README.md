@@ -130,7 +130,17 @@ gcloud builds submit . \
 pulumi -C infra/control-plane config set workspaceImage "$image" --stack west
 ```
 
-Use the immutable digest printed by Cloud Build when updating either stack
+Cloud Build uses Buildx to push images and export all build stages to an Artifact
+Registry cache. Workspace builds use `workspace-server:build-cache`; control-plane
+builds use `control-plane:build-cache-<target>` so the parallel transition and
+frontend builds do not overwrite each other. Missing caches are populated by the
+first successful build. Dependency manifests, Python requirements, and Chromium
+installation precede source copies, so source-only changes reuse those layers.
+The existing repository and builder permissions cover the caches; no separate
+infrastructure is required. To test without updating release caches, pass
+`_CACHE_IMAGE=<isolated-cache-image>` in the Cloud Build substitutions.
+
+Use the immutable digest printed by Buildx when updating either stack
 configuration value.
 
 ## OAuth and runtime secrets
