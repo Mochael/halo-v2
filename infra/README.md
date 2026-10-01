@@ -178,9 +178,12 @@ callback.
 
 Local development reads the canonical workspace secrets with the active
 Application Default Credentials identity. Production workspace VMs use their
-attached service account for both those secrets and
-`google-vertex/gemini-3.8-flash`; Pulumi grants the corresponding Secret Manager
-and Vertex AI roles.
+attached service account to read those secrets and `together-ai-api-key`.
+The workspace server uses that key for `together/deepseek-ai/DeepSeek-V4.1-Flash`;
+Pulumi grants Secret Manager access to each workspace runtime.
+The first Together rollout retains the Vertex AI service and workspace IAM grants
+because IAM is applied before existing VMs are replaced. Remove those grants in a
+later release after every workspace VM runs the Together image.
 
 ## Recovery snapshots
 

@@ -108,8 +108,9 @@ Graceful server shutdown removes both files. Desktop reload reads the latest
 connection, including after a server restart.
 
 `HALO_LLM_CONFIG` selects the existing OpenAI-compatible inference transport.
-Otherwise the process uses the same local Pi provider/model configuration as
-before. See [the inference boundary](../../packages/workspace-server/src/llm/README.md).
+Otherwise the process loads `together-ai-api-key` from GCP Secret Manager in
+`halo-relay` through ADC and uses Pi’s `together/deepseek-ai/DeepSeek-V4.1-Flash`
+model through the OpenAI-compatible Pi transport. See [the inference boundary](../../packages/workspace-server/src/llm/README.md).
 
 ## Credential storage
 

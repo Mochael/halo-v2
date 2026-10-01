@@ -15,6 +15,7 @@ const shared = new pulumi.StackReference(
 const image = configuration.require("image");
 const googleWebClientIdSecretId = "halo-workspace-google-web-client-id";
 const googleWebClientSecretId = "halo-workspace-google-web-client-secret";
+const togetherApiKeySecretId = "together-ai-api-key";
 
 const identity = new gcp.serviceaccount.Account("runtime", {
   accountId: name,
@@ -35,11 +36,21 @@ new gcp.projects.IAMMember("runtime-logs", {
   role: "roles/logging.logWriter",
   member: pulumi.interpolate`serviceAccount:${identity.email}`,
 });
+// Keep access for the running Gemini image until the VM is updated to Together.
 const vertexAiAccess = new gcp.projects.IAMMember("vertex-ai", {
   project,
   role: "roles/aiplatform.user",
   member: pulumi.interpolate`serviceAccount:${identity.email}`,
 });
+const togetherApiKeyAccess = new gcp.secretmanager.SecretIamMember(
+  "together-api-key",
+  {
+    project,
+    secretId: togetherApiKeySecretId,
+    role: "roles/secretmanager.secretAccessor",
+    member: pulumi.interpolate`serviceAccount:${identity.email}`,
+  },
+);
 const googleWebClientIdAccess = new gcp.secretmanager.SecretIamMember(
   "workspace-google-web-client-id",
   {
@@ -108,6 +119,7 @@ const instance = new gcp.compute.Instance(
     dependsOn: [
       imageAccess,
       vertexAiAccess,
+      togetherApiKeyAccess,
       googleWebClientIdAccess,
       googleWebClientSecretAccess,
     ],

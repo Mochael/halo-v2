@@ -10,11 +10,9 @@ import { ApplicationMode } from "./ApplicationMode.js";
 import { readGcpSecret } from "./readGcpSecret.js";
 
 const inferenceProjectId = "halo-relay";
-const inferenceLocation = "global";
+const togetherApiKeySecretId = "together-ai-api-key";
 const googleWebClientIdSecretId = "halo-workspace-google-web-client-id";
 const googleWebClientSecretId = "halo-workspace-google-web-client-secret";
-// Pi reserves this credential value to select Vertex Application Default Credentials.
-const vertexAdcMarker = "gcp-vertex-credentials";
 const developmentUserSchema = Type.Object({
   id: Type.String({ minLength: 1 }),
 });
@@ -71,25 +69,14 @@ type OpenAIInferenceConfig = {
   options: {
     model: Model<"openai-completions">;
     apiKey: string;
-  };
-};
-
-type PiInferenceConfig = {
-  backend: "pi";
-  options: {
-    agentDir: string;
-    provider: string;
-    modelId: string;
-    apiKey: string;
-    environment: Record<string, string>;
-    reasoning: ThinkingLevel;
+    reasoning?: ThinkingLevel;
   };
 };
 
 export type WorkspaceServerApplicationConfig = {
   mode: ApplicationMode;
   server: WorkspaceServerConfig;
-  inference: OpenAIInferenceConfig | PiInferenceConfig;
+  inference: OpenAIInferenceConfig;
   googleWebOAuthClient: GoogleWebOAuthClient;
   oauthTestOrigin: string | undefined;
 };
@@ -113,7 +100,7 @@ export async function readWorkspaceServerApplicationConfig(): Promise<
       ? await readDevelopmentConfig()
       : await readConfigFile(configPath);
   if (server instanceof Error) return server;
-  const inference = readInferenceConfig(server.workspaceRoot);
+  const inference = await readInferenceConfig();
   if (inference instanceof Error) return inference;
   const mode =
     configPath === undefined
@@ -293,9 +280,7 @@ async function readExistingDevelopmentUserId(userPath: string) {
   return parsed.id;
 }
 
-function readInferenceConfig(
-  workspaceRoot: string,
-): OpenAIInferenceConfig | PiInferenceConfig | Error {
+async function readInferenceConfig(): Promise<OpenAIInferenceConfig | Error> {
   const configured = process.env.HALO_LLM_CONFIG;
   if (configured !== undefined) {
     const options = errore.try({
@@ -311,17 +296,38 @@ function readInferenceConfig(
     return { backend: "openAI", options };
   }
 
+  const apiKey = await readGcpSecret({
+    projectId: inferenceProjectId,
+    secretId: togetherApiKeySecretId,
+  });
+  if (apiKey instanceof Error) return apiKey;
+
   return {
-    backend: "pi",
+    backend: "openAI",
     options: {
-      agentDir: path.join(workspaceRoot, ".pi", "agent"),
-      provider: "google-vertex",
-      modelId: "gemini-3.8-flash",
-      apiKey: vertexAdcMarker,
-      environment: {
-        GOOGLE_CLOUD_PROJECT: inferenceProjectId,
-        GOOGLE_CLOUD_LOCATION: inferenceLocation,
+      // The installed Pi catalog predates this model; supply its published metadata.
+      model: {
+        id: "deepseek-ai/DeepSeek-V4.1-Flash",
+        name: "DeepSeek V4.1 Flash",
+        provider: "together",
+        api: "openai-completions",
+        baseUrl: "https://api.together.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        cost: { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 },
+        compat: {
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: false,
+          maxTokensField: "max_tokens",
+          thinkingFormat: "together",
+          supportsStrictMode: false,
+          supportsLongCacheRetention: false,
+        },
       },
+      apiKey,
       reasoning: "low",
     },
   };
