@@ -37,6 +37,19 @@ runtime must fail visibly. The runtime must support Chrome's Linux sandbox;
 verify `chrome://sandbox` on each deployment environment. Do not disable container
 isolation or grant broad privileges to work around a sandbox startup failure.
 
+The GCP startup script writes `/etc/halo/desktop-seccomp.json` and passes it to
+Docker with `--security-opt seccomp=...`. The vendored
+`infra/workspace/desktop-seccomp.json` is the Apache-2.0-licensed
+[Moby 20.10.24 default profile](https://github.com/moby/moby/blob/v20.10.24/profiles/seccomp/default.json),
+matching Debian 12's Docker version, with one added allow rule for `clone`,
+`setns`, and `unshare`. This follows
+[Playwright's browser sandbox guidance](https://playwright.dev/docs/docker#crawling-and-scraping).
+It lets the non-root browser create its own namespaces while retaining Docker's
+default-deny syscall policy. It adds no Linux capabilities. The permission applies
+to the workspace container, not only Chrome; refresh the profile when upgrading
+the host Docker policy. A previously healthy container without the profile is
+restarted when startup applies this configuration.
+
 Before promoting this spike, validate interaction over a deployed connection,
 native clipboard integration, macOS-to-Linux shortcuts, multiple viewers resizing
 the same display, and desktop failure recovery. The current viewer does not bridge
@@ -57,12 +70,26 @@ authenticated gateway connection completed the VNC handshake.
 snapshot with Chromium and Terminal open showed about 961 MiB and 2.7% CPU for the
 whole workspace container; this is not a capacity or latency benchmark. The local
 image used a cached workspace base and an isolated test configuration with no
-model calls. A clean production image build and deployed GCP interaction remain
-to be validated.
+model calls. The follow-up below validates a clean image on GCP.
 
 The follow-up switched the desktop launcher to Google Chrome 154.0.8037.92 on
 local ARM64 Linux. It launched from the panel without extra container privileges
 and without `--no-sandbox`. Its `chrome://sandbox` page reported namespace, PID
 namespace, network namespace, and Seccomp-BPF sandbox support (including TSYNC),
 and "You are adequately sandboxed." Yama ptrace protection was unavailable in the
-local kernel. These results do not establish sandbox support on the GCP host.
+local kernel.
+
+The GCP follow-up built the complete workspace Dockerfile on an isolated AMD64
+Debian 12 VM (kernel 6.1.0-53-cloud-amd64, Docker 20.10.24). Chrome failed to start
+with Docker's default seccomp profile. With the vendored profile above, headed
+Chrome 154.0.8037.92 reported namespace, PID/network namespace, and Seccomp-BPF
+with TSYNC active, plus "You are adequately sandboxed." Yama ptrace protection
+was unavailable. The container remained non-privileged with no added capabilities.
+
+Through an IAP SSH tunnel and a local control-plane gateway, Terminal input
+created a file visible in Halo and readable in Chrome. Closing and reopening
+the viewer preserved the desktop. Direct and gateway HTTP/WebSocket checks
+rejected unauthenticated requests and accepted authenticated connections.
+`pnpm run check-affected` passed all 45 tasks. The VM used an isolated workspace
+server configuration without model calls or a service account. Production
+control-plane routing and deployed-connection latency remain to be validated.
