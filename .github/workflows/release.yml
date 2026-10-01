@@ -163,16 +163,15 @@ jobs:
             exit 1
           fi
 
-  deploy:
-    name: Deploy production
+  build-images:
+    name: Build production images
     if: github.event_name == 'push'
-    needs: [prepare, build-desktop]
+    needs: prepare
     runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
+      transition_image: ${{ steps.images.outputs.transition_image }}
       frontend_image: ${{ steps.images.outputs.frontend_image }}
       workspace_image: ${{ steps.images.outputs.workspace_image }}
-      instances: ${{ steps.workspaces.outputs.instances }}
-      workspace_template: ${{ steps.workspaces.outputs.template }}
     permissions:
       contents: read
       id-token: write
@@ -180,7 +179,6 @@ jobs:
       PROJECT: halo-relay
       REGION: us-west2
       VERSION: ${{ needs.prepare.outputs.version }}
-      ZONE: us-west2-a
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -295,10 +293,63 @@ jobs:
           echo "frontend_image=$(pin_image "$control_plane_image")" >> "$GITHUB_OUTPUT"
           echo "workspace_image=$(pin_image "$workspace_image")" >> "$GITHUB_OUTPUT"
 
+  deploy:
+    name: Deploy production
+    if: github.event_name == 'push'
+    needs: [prepare, build-images, build-desktop]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      frontend_image: ${{ needs.build-images.outputs.frontend_image }}
+      workspace_image: ${{ needs.build-images.outputs.workspace_image }}
+      instances: ${{ steps.workspaces.outputs.instances }}
+      workspace_template: ${{ steps.workspaces.outputs.template }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT: halo-relay
+      VERSION: ${{ needs.prepare.outputs.version }}
+      ZONE: us-west2-a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require deployment identity
+        env:
+          PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$PROVIDER" ] || [ -z "$SERVICE_ACCOUNT" ]; then
+            echo "Set GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_DEPLOY_SERVICE_ACCOUNT as repository variables"
+            exit 1
+          fi
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Setup pnpm
+        uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Select Pulumi backend
+        run: pnpm --filter @get-halo/infra exec pulumi login gs://halo-relay-pulumi-state
+
       - name: Deploy backends with the previous browser bundle
         env:
-          TRANSITION_IMAGE: ${{ steps.images.outputs.transition_image }}
-          WORKSPACE_IMAGE: ${{ steps.images.outputs.workspace_image }}
+          TRANSITION_IMAGE: ${{ needs.build-images.outputs.transition_image }}
+          WORKSPACE_IMAGE: ${{ needs.build-images.outputs.workspace_image }}
         run: |
           pnpm --filter @get-halo/infra exec pulumi -C control-plane up --stack west --yes --non-interactive \
             --config "halo-control-plane:controlPlaneImage=$TRANSITION_IMAGE" \
