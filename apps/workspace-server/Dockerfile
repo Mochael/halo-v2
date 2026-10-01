@@ -10,14 +10,6 @@ RUN apt-get update \
        xfce4-settings thunar xfce4-terminal x11-utils x11-xserver-utils \
        adwaita-icon-theme fonts-dejavu xdg-utils \
     && rm -rf /var/lib/apt/lists/*
-# The desktop uses Google Chrome; BrowserService keeps Playwright's Chromium.
-RUN curl --fail --location --silent --show-error \
-      "https://dl.google.com/linux/direct/google-chrome-stable_current_$(dpkg --print-architecture).deb" \
-      --output /tmp/google-chrome-stable.deb \
-    && apt-get update \
-    && apt-get install --yes --no-install-recommends /tmp/google-chrome-stable.deb \
-    && rm -f /tmp/google-chrome-stable.deb \
-    && rm -rf /var/lib/apt/lists/*
 RUN npm install --global pnpm@12.1.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
@@ -52,6 +44,17 @@ RUN pnpm --filter @get-halo/extension-sdk run build \
 # The workspace CLI builds and packs the local SDK when authoring extensions.
 RUN chown -R node:node /opt/halo/packages
 
+# Refresh Chrome for each release revision without invalidating dependency layers.
+ARG REVISION=local
+# The desktop uses Google Chrome; BrowserService keeps Playwright's Chromium.
+RUN curl --fail --location --silent --show-error \
+      "https://dl.google.com/linux/direct/google-chrome-stable_current_$(dpkg --print-architecture).deb" \
+      --output /tmp/google-chrome-stable.deb \
+    && apt-get update \
+    && apt-get install --yes --no-install-recommends /tmp/google-chrome-stable.deb \
+    && rm -f /tmp/google-chrome-stable.deb \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV HOME=/home/node \
     DISPLAY=:1 \
     HALO_DESKTOP_ORIGIN=http://127.0.0.1:6080 \
@@ -75,6 +78,5 @@ ENTRYPOINT ["dbus-run-session", "--", "bash", "/opt/halo/apps/workspace-server/d
 CMD ["/opt/halo/apps/workspace-server/container.json"]
 
 ARG VERSION=dev
-ARG REVISION=local
 ENV HALO_BUILD_VERSION=$VERSION HALO_BUILD_REVISION=$REVISION
 LABEL org.opencontainers.image.revision=$REVISION

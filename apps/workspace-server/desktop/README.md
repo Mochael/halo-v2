@@ -26,7 +26,9 @@ Workspaces without this setting return an unavailable message.
 Build with the existing workspace Dockerfile and run with the usual persistent
 home mount, `--init`, and `--shm-size=1g`. The image installs Google's official
 stable Chrome Debian package for its architecture (`amd64` or `arm64`). The
-version is resolved when that image layer builds. Headed Chrome uses its own
+version is resolved when that image layer builds. Production builds pass the
+release revision as a cache key, refreshing Chrome on each new release while
+reusing earlier dependency layers. Headed Chrome uses its own
 persistent profile at `~/.config/halo-chrome`; the existing browser service still
 uses Playwright Chromium and is unchanged. The initial Chromium spike profile
 is not migrated.
