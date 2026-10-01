@@ -1253,6 +1253,9 @@ e2eTest(
     });
     await app.page.getByRole("link", { name: path, exact: true }).click();
     await app.page.setViewportSize({ width: 390, height: 844 });
+    await expect(
+      app.page.getByRole("button", { name: "Open sidebar", exact: true }),
+    ).toBeVisible();
     const editor = app.page
       .getByRole("main", { name: path, exact: true })
       .getByLabel(path, { exact: true });
@@ -1271,9 +1274,10 @@ e2eTest(
         touchPoints: [],
       });
     };
-    const linkBox = await editor
-      .getByRole("link", { name: "Guide" })
-      .boundingBox();
+    const link = editor.getByRole("link", { name: "Guide" });
+    // Wait for the responsive layout to settle before taking touch coordinates.
+    await link.click({ trial: true });
+    const linkBox = await link.boundingBox();
     expect(linkBox).not.toBeNull();
     await tap({
       x: linkBox!.x + linkBox!.width / 2,
