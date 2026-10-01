@@ -3,7 +3,13 @@ import { useQuery, useIsMutating } from "@tanstack/react-query";
 import { useApi } from "../api/ApiProvider.js";
 import { MediaFilePreview } from "./MediaFilePreview.js";
 import { TextFileEditor } from "./TextFileEditor.js";
-import { backgroundColor, flex, proseMaxWidth, spacing, text } from "maui";
+import {
+  backgroundColor,
+  flex,
+  proseContainerStyle,
+  spacing,
+  text,
+} from "maui";
 import { style, useStyles } from "purse-styles";
 import { useWorkspaceFileQuery } from "../api/ApiProvider.tsx";
 import { CodeViewFileEditor } from "./CodeViewFileEditor.tsx";
@@ -95,9 +101,8 @@ const styles = {
     overflow: "hidden",
     display: "flex",
   }),
-  content: style({
+  content: style(proseContainerStyle, {
     width: "100%",
-    maxWidth: proseMaxWidth,
     marginInline: "auto",
     minWidth: 0,
     height: "100%",

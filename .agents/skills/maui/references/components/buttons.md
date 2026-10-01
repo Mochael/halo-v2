@@ -28,7 +28,7 @@ Styled React Aria `Button` (default `type="button"`). Consumes `ButtonContext`, 
 | `onClick` | Still supported. React Aria also exposes `onPress` |
 | `children` | Text is wrapped for cap-height trim; SVG icons sit beside text. Icon-only needs `aria-label` |
 
-Primary: fill step 9, hover 10, light text (`onAccent`, or step 12 on amber/lime/mint/sky/yellow). Custom CSS fill drops alpha; hover is `l - 0.04`; text is white or near-black from lightness. Edge is `tintedSubtle`. Quiet + color: no fill; color tints the label/icon (hover 7% wash, same idea as uncolored quiet).
+Primary: fill step 9, hover 10, light text (`onAccent`, or step 12 on amber/lime/mint/sky/yellow). Custom CSS fill drops alpha; hover is `l - 0.04`; text is white or near-black from lightness. Edge is `tintedSubtle`. Quiet: no fill; `variantColor` tints the label/icon. Hover/press mix `grayAlpha[9]` (or that color’s alpha 9, or the hex) into transparent at 6% light / 9% dark; press is 2×. Hover fills snap.
 
 While a menu or overlay is open, the trigger keeps the active fill via RAC `data-pressed` / `aria-expanded` (same tokens as `:active`: `elementActive`, or primary step 10).
 

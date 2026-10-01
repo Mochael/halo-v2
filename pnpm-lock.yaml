@@ -240,8 +240,8 @@ importers:
         specifier: ^11.0.2
         version: 11.0.2(supports-color@8.1.1)
       maui:
-        specifier: npm:@tanishqkancharla/maui@0.0.33
-        version: '@tanishqkancharla/maui@0.0.33(@babel/runtime@7.29.7)(@codemirror/search@6.7.1)(@codemirror/theme-one-dark@6.1.3)(@floating-ui/dom@1.8.0)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/extensions@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2))(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(codemirror@6.0.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@8.1.1)'
+        specifier: npm:@tanishqkancharla/maui@0.0.38
+        version: '@tanishqkancharla/maui@0.0.38(@babel/runtime@7.29.7)(@codemirror/search@6.7.1)(@codemirror/theme-one-dark@6.1.3)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/extension-placeholder@3.29.2(@tiptap/extensions@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)))(@tiptap/markdown@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)(@tiptap/react@3.29.2(@floating-ui/dom@1.8.0)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@tiptap/starter-kit@3.29.2)(codemirror@6.0.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@8.1.1)'
       react:
         specifier: ^19.2.8
         version: 19.2.8
@@ -633,8 +633,8 @@ importers:
         specifier: workspace:*
         version: link:../client
       '@get-halo/extension-tools':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.2.1
+        version: 0.2.1
       '@get-halo/shared':
         specifier: workspace:*
         version: link:../shared
@@ -766,11 +766,11 @@ importers:
         specifier: 17.0.6
         version: 17.0.6
       maui:
-        specifier: npm:@tanishqkancharla/maui@0.0.33
-        version: '@tanishqkancharla/maui@0.0.33(@babel/runtime@7.29.7)(@codemirror/search@6.7.1)(@codemirror/theme-one-dark@6.1.3)(@floating-ui/dom@1.8.0)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/extensions@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2))(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(codemirror@6.0.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@8.1.1)'
+        specifier: npm:@tanishqkancharla/maui@0.0.38
+        version: '@tanishqkancharla/maui@0.0.38(@babel/runtime@7.29.7)(@codemirror/search@6.7.1)(@codemirror/theme-one-dark@6.1.3)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/extension-placeholder@3.29.2(@tiptap/extensions@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)))(@tiptap/markdown@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)(@tiptap/react@3.29.2(@floating-ui/dom@1.8.0)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@tiptap/starter-kit@3.29.2)(codemirror@6.0.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@8.1.1)'
       purse-styles:
-        specifier: ^0.2.3
-        version: 0.2.3(react@19.2.8)
+        specifier: ^0.2.4
+        version: 0.2.4(react@19.2.8)
       react-aria-components:
         specifier: 1.21.0
         version: 1.21.0(patch_hash=fad70a611cdeb4465a9957f63d6c8c87d448a10e860cf6bfe0fed6dff4007105)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -899,8 +899,8 @@ importers:
         specifier: 17.0.6
         version: 17.0.6
       maui:
-        specifier: npm:@tanishqkancharla/maui@0.0.33
-        version: '@tanishqkancharla/maui@0.0.33(@babel/runtime@7.29.7)(@codemirror/search@6.7.1)(@codemirror/theme-one-dark@6.1.3)(@floating-ui/dom@1.8.0)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/extensions@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2))(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(codemirror@6.0.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@8.1.1)'
+        specifier: npm:@tanishqkancharla/maui@0.0.38
+        version: '@tanishqkancharla/maui@0.0.38(@babel/runtime@7.29.7)(@codemirror/search@6.7.1)(@codemirror/theme-one-dark@6.1.3)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/extension-placeholder@3.29.2(@tiptap/extensions@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)))(@tiptap/markdown@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)(@tiptap/react@3.29.2(@floating-ui/dom@1.8.0)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@tiptap/starter-kit@3.29.2)(codemirror@6.0.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@8.1.1)'
       node-diff3:
         specifier: 3.2.1
         version: 3.2.1
@@ -1680,8 +1680,8 @@ packages:
   '@gar/promisify@1.1.3':
     resolution: {integrity: sha512-k2Ty1JcVojjJFwrg/ThKi2ujJ7XNLYaFGNB/bWT9wGR+oSMJHMa5w+CUq6p/pVrKeNNgA7pCqEcjSnHVoqJQFw==}
 
-  '@get-halo/extension-tools@0.2.0':
-    resolution: {integrity: sha512-6XDu0Qi/uFaYzKvOapA0HGW6VQAl8k2iA4QjqKMri/M6Blny18EfadK7dEGbi5waAyWy+5gCkZSIiLSaZD6CHQ==}
+  '@get-halo/extension-tools@0.2.1':
+    resolution: {integrity: sha512-8I/0znAUVJ+htNPS1mTUoFTYs2/RfiRyD3wNE2vYSQ47l+uI0uz8FSeg5uzQQl38C+L14/oYMxz6lS00nr3ozQ==}
     hasBin: true
 
   '@google/genai@1.52.0':
@@ -3587,11 +3587,30 @@ packages:
       react: ^19.0.0
       react-dom: ^19.0.0
 
-  '@tanishqkancharla/maui@0.0.33':
-    resolution: {integrity: sha512-GrZGxyvmAbaW+mmGNMUN71lGzezVMFFLkWr+xriYxNjvYWbRfqAxEvFDX/XQknR36SbQ/LBHbi17H6uS3U9OTQ==}
+  '@tanishqkancharla/maui@0.0.38':
+    resolution: {integrity: sha512-18XNSVffd7r2QmpwC0uhl6SEmePOJ5g4/h7P2axWbqd0f2aUpiwaB/3l9JIW03qXSPOPfnkr98nTtewgS7EOTg==}
     peerDependencies:
+      '@tiptap/core': ^3.29.2
+      '@tiptap/extension-placeholder': ^3.29.2
+      '@tiptap/markdown': ^3.29.2
+      '@tiptap/pm': ^3.29.2
+      '@tiptap/react': ^3.29.2
+      '@tiptap/starter-kit': ^3.29.2
       react: ^19.0.0
       react-dom: ^19.0.0
+    peerDependenciesMeta:
+      '@tiptap/core':
+        optional: true
+      '@tiptap/extension-placeholder':
+        optional: true
+      '@tiptap/markdown':
+        optional: true
+      '@tiptap/pm':
+        optional: true
+      '@tiptap/react':
+        optional: true
+      '@tiptap/starter-kit':
+        optional: true
 
   '@tanishqkancharla/tandem-core@0.3.0':
     resolution: {integrity: sha512-lM7L3eiAhTSXE47ex071Og0nkuXKUJ9cP99NQvd2M+A4ypA8laUFTQT3YZIHPaGmhnlFcj5N/+lHXSgvuE9nzw==}
@@ -7708,6 +7727,11 @@ packages:
     peerDependencies:
       react: ^18.3.1 || ^19.0.0
 
+  purse-styles@0.2.4:
+    resolution: {integrity: sha512-crsIHcv2Mo6mArHC1BCQyTS7/jH4MHqdU5Yujg/j49E7Jrj3SGWVUGPUVlriPK0VPekthqPOVbU1K6J930+d/A==}
+    peerDependencies:
+      react: ^18.3.1 || ^19.0.0
+
   qs@6.15.3:
     resolution: {integrity: sha512-O9gl3zCl5h5blw1KGUzQKhA5oUXSl8rwUIM5o0S3nCXMliSvy5Dzx7/DJcI+SwgICv+IneSZwhBh1oSyEHA71A==}
     engines: {node: '>=0.6'}
@@ -10281,7 +10305,7 @@ snapshots:
 
   '@gar/promisify@1.1.3': {}
 
-  '@get-halo/extension-tools@0.2.0':
+  '@get-halo/extension-tools@0.2.1':
     dependencies:
       errore: 0.14.1
       esbuild: 0.28.2
@@ -12105,7 +12129,7 @@ snapshots:
       lodash: 4.18.1
       motion: 13.2.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       prettier: 3.9.6
-      purse-styles: 0.2.3(react@19.2.8)
+      purse-styles: 0.2.4(react@19.2.8)
       react: 19.2.8
       react-aria: 3.52.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       react-aria-components: 1.21.0(patch_hash=fad70a611cdeb4465a9957f63d6c8c87d448a10e860cf6bfe0fed6dff4007105)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -12130,7 +12154,7 @@ snapshots:
       - codemirror
       - supports-color
 
-  '@tanishqkancharla/maui@0.0.33(@babel/runtime@7.29.7)(@codemirror/search@6.7.1)(@codemirror/theme-one-dark@6.1.3)(@floating-ui/dom@1.8.0)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/extensions@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2))(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(codemirror@6.0.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@8.1.1)':
+  '@tanishqkancharla/maui@0.0.38(@babel/runtime@7.29.7)(@codemirror/search@6.7.1)(@codemirror/theme-one-dark@6.1.3)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/extension-placeholder@3.29.2(@tiptap/extensions@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)))(@tiptap/markdown@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)(@tiptap/react@3.29.2(@floating-ui/dom@1.8.0)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@tiptap/starter-kit@3.29.2)(codemirror@6.0.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@8.1.1)':
     dependencies:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.11.0
@@ -12144,11 +12168,6 @@ snapshots:
       '@radix-ui/colors': 3.0.0
       '@react-spring/web': 10.1.2(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@streamdown/code': 1.1.1(react@19.2.8)
-      '@tiptap/extension-placeholder': 3.29.2(@tiptap/extensions@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2))
-      '@tiptap/markdown': 3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)
-      '@tiptap/pm': 3.29.2
-      '@tiptap/react': 3.29.2(@floating-ui/dom@1.8.0)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@tiptap/starter-kit': 3.29.2
       '@types/inline-style-prefixer': 5.0.3
       '@uiw/react-codemirror': 4.25.11(@babel/runtime@7.29.7)(@codemirror/autocomplete@6.20.3)(@codemirror/language@6.12.4)(@codemirror/lint@6.9.7)(@codemirror/search@6.7.1)(@codemirror/state@6.7.1)(@codemirror/theme-one-dark@6.1.3)(@codemirror/view@6.43.9)(codemirror@6.0.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       dedent: 1.7.2
@@ -12156,7 +12175,7 @@ snapshots:
       lodash: 4.18.1
       motion: 13.2.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       prettier: 3.9.6
-      purse-styles: 0.2.3(react@19.2.8)
+      purse-styles: 0.2.4(react@19.2.8)
       react: 19.2.8
       react-aria: 3.52.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       react-aria-components: 1.21.0(patch_hash=fad70a611cdeb4465a9957f63d6c8c87d448a10e860cf6bfe0fed6dff4007105)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -12168,15 +12187,17 @@ snapshots:
       tuple-database: 2.2.4(react@19.2.8)
       use-state-dispatch: 0.6.0(react@19.2.8)
       wouter: 3.10.0(react@19.2.8)
+    optionalDependencies:
+      '@tiptap/core': 3.29.2(@tiptap/pm@3.29.2)
+      '@tiptap/extension-placeholder': 3.29.2(@tiptap/extensions@3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2))
+      '@tiptap/markdown': 3.29.2(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)
+      '@tiptap/pm': 3.29.2
+      '@tiptap/react': 3.29.2(@floating-ui/dom@1.8.0)(@tiptap/core@3.29.2(@tiptap/pm@3.29.2))(@tiptap/pm@3.29.2)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@tiptap/starter-kit': 3.29.2
     transitivePeerDependencies:
       - '@babel/runtime'
       - '@codemirror/search'
       - '@codemirror/theme-one-dark'
-      - '@floating-ui/dom'
-      - '@tiptap/core'
-      - '@tiptap/extensions'
-      - '@types/react'
-      - '@types/react-dom'
       - babel-plugin-macros
       - codemirror
       - supports-color
@@ -16692,6 +16713,13 @@ snapshots:
   pure-rand@8.4.2: {}
 
   purse-styles@0.2.3(react@19.2.8):
+    dependencies:
+      csstype: 3.2.3
+      extendable-expect: 1.0.5
+      lodash-es: 4.18.1
+      react: 19.2.8
+
+  purse-styles@0.2.4(react@19.2.8):
     dependencies:
       csstype: 3.2.3
       extendable-expect: 1.0.5

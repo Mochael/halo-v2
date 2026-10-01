@@ -88,7 +88,7 @@ background.element
 background.accent              // accent[9]
 ```
 
-Hover/active washes use `color-mix` in oklch. **Do not transition `background` / `background-color` on hover.**
+Hover/active washes use `color-mix` in oklch (`surfaceWash`, transparent by default). **Do not transition `background` / `background-color` on hover.** Quiet `Button` uses `surfaceMixPercent` (6% light / 9% dark, press 2×) with Alpha[9]. Raised `elementHover` is still 3.5% gray-12 over the element surface.
 
 ## Text
 
@@ -100,6 +100,7 @@ text({
 	fontWeight: 500,     // 400 | 500 | 600 | 700          (default 400)
 	color: "lowContrast", // lowContrast | highContrast | accent | onAccent
 	monospace: true,
+	tabular: true,       // font-variant-numeric: tabular-nums
 })
 ```
 
@@ -114,10 +115,11 @@ text({
 
 - `lowContrast` → `gray[11]`, `highContrast` → `gray[12]`, `accent` → `accent[11]`, `onAccent` → white.
 - UI sans: `fontFamily` (system ui-sans-serif stack). Mono: Commit Mono with `ss05` smart kerning (`monoFontStyle` / `monospace`).
+- `tabular: true` → `font-variant-numeric: tabular-nums`. NumberField, TableHead, and TableCell turn this on by default. Body copy and Prose stay off.
 - `baseTextStyle` is md / 400 / highContrast — already on `html, body`.
 - Inside `Prose`, `H1`–`H4` / `P` / lists switch to the **prose** scale (`sm` 14px, `md` 16px, `lg` 18px), which is larger and has reading rhythm. Do not put app chrome inside `Prose`.
 
-`proseMaxWidth` is `"72ch"`. `sizing.contentWidth` is `maxWidth: 72ch`. `sizing.fullWidth` is `width: 100%`.
+`proseContainerStyle` is the composable column (`maxWidth: proseMaxWidth`, `"80ch"`). `sizing.contentWidth` is that same style. `sizing.fullWidth` is `width: 100%`.
 
 ## Spacing
 

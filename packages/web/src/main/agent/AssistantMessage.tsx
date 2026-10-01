@@ -17,8 +17,8 @@ import {
   backgroundColor,
   motionEasing,
   motionStreamDurationMs,
+  proseContainerStyle,
   proseHtml,
-  proseMaxWidth,
   proseStreamingMarkers,
   radius,
   shadow,
@@ -194,8 +194,7 @@ const streamdownAnimate = {
   stagger: 16,
 };
 
-const assistantMessageClass = style({
-  maxWidth: proseMaxWidth,
+const assistantMessageClass = style(proseContainerStyle, {
   minWidth: 0,
 });
 

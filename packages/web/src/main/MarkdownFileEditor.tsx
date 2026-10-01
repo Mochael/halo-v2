@@ -1,7 +1,7 @@
-import { EditorContent } from "@tiptap/react";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { colors, flex } from "maui";
+import { Editor } from "maui/editor";
 import { style, useStyles } from "purse-styles";
 import { useAutosaveFile } from "./useAutosaveFile.js";
 import { useMarkdownEditor } from "./useMarkdownEditor.js";
@@ -54,7 +54,6 @@ export function MarkdownFileEditor({
       forceUpdate((current) => current + 1);
     },
     "aria-label": path,
-    size: "sm",
     extensions,
   });
   const doc = editor?.state.doc;
@@ -145,7 +144,7 @@ export function MarkdownFileEditor({
   return (
     <>
       {error !== undefined && <p role="alert">{error}</p>}
-      <EditorContent editor={editor} className={className} />
+      <Editor editor={editor} size="sm" className={className} />
     </>
   );
 }

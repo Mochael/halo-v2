@@ -163,16 +163,15 @@ jobs:
             exit 1
           fi
 
-  deploy:
-    name: Deploy production
+  build-images:
+    name: Build production images
     if: github.event_name == 'push'
-    needs: [prepare, build-desktop]
+    needs: prepare
     runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
+      transition_image: ${{ steps.images.outputs.transition_image }}
       frontend_image: ${{ steps.images.outputs.frontend_image }}
       workspace_image: ${{ steps.images.outputs.workspace_image }}
-      instances: ${{ steps.workspaces.outputs.instances }}
-      workspace_template: ${{ steps.workspaces.outputs.template }}
     permissions:
       contents: read
       id-token: write
@@ -180,7 +179,6 @@ jobs:
       PROJECT: halo-relay
       REGION: us-west2
       VERSION: ${{ needs.prepare.outputs.version }}
-      ZONE: us-west2-a
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -295,10 +293,63 @@ jobs:
           echo "frontend_image=$(pin_image "$control_plane_image")" >> "$GITHUB_OUTPUT"
           echo "workspace_image=$(pin_image "$workspace_image")" >> "$GITHUB_OUTPUT"
 
+  deploy:
+    name: Deploy production
+    if: github.event_name == 'push'
+    needs: [prepare, build-images, build-desktop]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      frontend_image: ${{ needs.build-images.outputs.frontend_image }}
+      workspace_image: ${{ needs.build-images.outputs.workspace_image }}
+      instances: ${{ steps.workspaces.outputs.instances }}
+      workspace_template: ${{ steps.workspaces.outputs.template }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT: halo-relay
+      VERSION: ${{ needs.prepare.outputs.version }}
+      ZONE: us-west2-a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require deployment identity
+        env:
+          PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$PROVIDER" ] || [ -z "$SERVICE_ACCOUNT" ]; then
+            echo "Set GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_DEPLOY_SERVICE_ACCOUNT as repository variables"
+            exit 1
+          fi
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Setup pnpm
+        uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Select Pulumi backend
+        run: pnpm --filter @get-halo/infra exec pulumi login gs://halo-relay-pulumi-state
+
       - name: Deploy backends with the previous browser bundle
         env:
-          TRANSITION_IMAGE: ${{ steps.images.outputs.transition_image }}
-          WORKSPACE_IMAGE: ${{ steps.images.outputs.workspace_image }}
+          TRANSITION_IMAGE: ${{ needs.build-images.outputs.transition_image }}
+          WORKSPACE_IMAGE: ${{ needs.build-images.outputs.workspace_image }}
         run: |
           pnpm --filter @get-halo/infra exec pulumi -C control-plane up --stack west --yes --non-interactive \
             --config "halo-control-plane:controlPlaneImage=$TRANSITION_IMAGE" \
@@ -329,7 +380,7 @@ jobs:
           echo "instances=$instances" >> "$GITHUB_OUTPUT"
 
   rollout-workspaces:
-    name: Recreate workspace VM ${{ matrix.instance }}
+    name: Update workspace container ${{ matrix.instance }}
     if: github.event_name == 'push'
     needs: [prepare, deploy]
     strategy:
@@ -358,79 +409,13 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Recreate and verify workspace VM
+      - name: Update and verify workspace container
         env:
           INSTANCE: ${{ matrix.instance }}
           TEMPLATE: ${{ needs.deploy.outputs.workspace_template }}
           WORKSPACE_IMAGE: ${{ needs.deploy.outputs.workspace_image }}
         shell: bash
-        run: |
-          template_name="${TEMPLATE##*/}"
-          template_details="$(gcloud compute instance-templates describe "$template_name" \
-            --project="$PROJECT" --format=json)"
-          startup_script="$RUNNER_TEMP/workspace-startup.sh"
-          jq -r '.properties.metadata.items[] | select(.key == "startup-script") | .value' \
-            <<< "$template_details" > "$startup_script"
-
-          details="$(gcloud compute instances describe "$INSTANCE" \
-            --project="$PROJECT" --zone="$ZONE" --format=json)"
-          workspace_id="${INSTANCE#halo-}"
-          workspace_label="$(jq -r '.labels["halo-workspace-id"] // empty' <<< "$details")"
-          if [ -n "$workspace_label" ] && [ "$workspace_label" != "$workspace_id" ]; then
-            echo "$INSTANCE has workspace label $workspace_label; expected $workspace_id"
-            exit 1
-          fi
-
-          owner_user_id="$(jq -r '.metadata.items[] | select(.key == "halo-owner-user-id") | .value' <<< "$details")"
-          if [ -z "$owner_user_id" ]; then
-            echo "$INSTANCE has no halo-owner-user-id metadata"
-            exit 1
-          fi
-
-          disk="$(jq -r '[.disks[] | select(.boot == false and .deviceName == "halo-workspace") | .source | split("/")[-1]] | if length == 1 then .[0] else empty end' <<< "$details")"
-          expected_disk="halo-$workspace_id-workspace"
-          if [ "$disk" != "$expected_disk" ]; then
-            echo "$INSTANCE has workspace disk $disk; expected $expected_disk"
-            exit 1
-          fi
-
-          metadata=("halo-owner-user-id=$owner_user_id" "halo-workspace-id=$workspace_id")
-          while IFS=$'\t' read -r key value; do
-            metadata+=("$key=$value")
-          done < <(jq -r '.properties.metadata.items[] | select(.key != "startup-script" and .key != "halo-owner-user-id" and .key != "halo-workspace-id") | [.key, .value] | @tsv' \
-            <<< "$template_details")
-          metadata_csv="$(IFS=,; echo "${metadata[*]}")"
-
-          gcloud compute instances delete "$INSTANCE" \
-            --project="$PROJECT" --zone="$ZONE" --keep-disks=data --quiet
-          gcloud compute instances create "$INSTANCE" \
-            --project="$PROJECT" \
-            --zone="$ZONE" \
-            --source-instance-template="$TEMPLATE" \
-            --labels="halo-workspace-id=$workspace_id" \
-            --metadata="$metadata_csv" \
-            --metadata-from-file="startup-script=$startup_script" \
-            --disk="name=$disk,device-name=halo-workspace,mode=rw,boot=no,auto-delete=no"
-
-          protocols="$(jq -c .protocols.workspace.supported "releases/$VERSION.json")"
-          ready_marker="HALO_WORKSPACE_READY image=$WORKSPACE_IMAGE protocols=$protocols revision=$GITHUB_SHA"
-          ready=false
-          for attempt in $(seq 1 120); do
-            if gcloud compute instances get-serial-port-output "$INSTANCE" \
-              --project="$PROJECT" --zone="$ZONE" --port=1 2>/dev/null | \
-              grep --fixed-strings --quiet "$ready_marker"; then
-              ready=true
-              break
-            fi
-            sleep 5
-          done
-
-          if [ "$ready" != "true" ]; then
-            echo "$INSTANCE did not report readiness for $WORKSPACE_IMAGE"
-            gcloud compute instances get-serial-port-output "$INSTANCE" \
-              --project="$PROJECT" --zone="$ZONE" --port=1 | tail -n 200
-            exit 1
-          fi
+        run: bash infra/workspace/rollout.sh
 
   test-e2e:
     name: Test release E2Es
