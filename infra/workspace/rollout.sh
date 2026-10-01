@@ -18,7 +18,12 @@ case "$status" in
     exit 1
     ;;
 esac
-workspace_id=$(jq -er '.metadata.items[] | select(.key == "halo-workspace-id") | .value' <<< "$details")
+workspace_id="${INSTANCE#halo-}"
+workspace_metadata=$(jq -er '.metadata.items[] | select(.key == "halo-workspace-id") | .value' <<< "$details")
+if [ "$workspace_metadata" != "$workspace_id" ]; then
+  echo "$INSTANCE has workspace metadata $workspace_metadata; expected $workspace_id" >&2
+  exit 1
+fi
 workspace_label=$(jq -r '.labels["halo-workspace-id"] // empty' <<< "$details")
 if [ -n "$workspace_label" ] && [ "$workspace_label" != "$workspace_id" ]; then
   echo "$INSTANCE has workspace label $workspace_label; expected $workspace_id" >&2
