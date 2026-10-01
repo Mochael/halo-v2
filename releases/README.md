@@ -2,10 +2,10 @@
 
 Run `pnpm prerelease <version>` from clean, current `main`. The release PR records `minimumFrontendVersion` and both API protocol requirements. The validator requires the backend to support every frontend from that minimum through the new release. The minimum carries forward; use `--minimum-frontend <version>` to deliberately retire older frontends. Additive API changes keep their protocol number; a breaking change needs an implemented, tested adapter before its protocol can be advertised.
 
-After merge, the release workflow:
+After merge, the release workflow prepares desktop artifacts and container images in parallel:
 
 1. Builds, signs, notarizes and verifies the desktop, then retains the exact artifacts with the release version, source SHA and archive SHA-256.
-2. Builds a workspace image and two control-plane images concurrently from that source SHA. The transition image serves the previous browser bundle; the final image serves the new bundle and retains the previous hashed assets for open tabs. The previous image and all deployment references are pinned by digest. Deployment waits for all three builds to succeed.
+2. Builds a workspace image and two control-plane images concurrently from that source SHA. The transition image serves the previous browser bundle; the final image serves the new bundle and retains the previous hashed assets for open tabs. The previous image and all deployment references are pinned by digest. Deployment waits for all three image builds and the verified desktop artifacts to succeed.
 3. Deploys the transition control plane, then recreates workspace VMs in separate Blacksmith jobs, up to ten at once, with their existing data disks. Checks the public control-plane bootstrap and authenticated, VM-local workspace CLI for the expected supported protocols and source SHA. A health-only response does not pass this gate. Every VM must report readiness before frontend publication starts.
 4. Promotes the prepared browser image, verifies its API identity, and records the published image tags used by the committed Pulumi config.
 5. Creates a draft GitHub release, uploads the previously verified desktop artifacts without rebuilding, and makes the completed release available to the updater.
