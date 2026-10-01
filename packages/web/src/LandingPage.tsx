@@ -4,7 +4,7 @@ import {
   Flex,
   P,
   Prose,
-  proseMaxWidth,
+  proseContainerStyle,
   TextField,
 } from "maui";
 import { style, useStyles } from "purse-styles";
@@ -59,9 +59,8 @@ const styles = {
     minHeight: "100dvh",
     backgroundColor: backgroundColor.app,
   }),
-  content: style({
+  content: style(proseContainerStyle, {
     width: "100%",
-    maxWidth: proseMaxWidth,
     minHeight: "100dvh",
     marginInline: "auto",
     padding: "clamp(24px, 5vw, 48px)",

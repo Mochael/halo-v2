@@ -6,7 +6,7 @@ Typography components have **no margin and no max-width**. Spacing belongs to th
 
 ## `Prose`
 
-Long-form column: `maxWidth: 72ch` (`proseMaxWidth`) plus vertical rhythm. `size?: "sm" | "md" | "lg"` (default `md`) is inherited via `useProseSize()`.
+Long-form column: compose `proseContainerStyle` (`maxWidth: 80ch`) plus vertical rhythm. `size?: "sm" | "md" | "lg"` (default `md`) is inherited via `useProseSize()`.
 
 ```tsx
 <Prose size="md">
