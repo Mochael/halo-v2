@@ -1258,6 +1258,8 @@ e2eTest(
       .getByLabel(path, { exact: true });
     const opened = await app.observeExternalUrls();
     const client = await app.page.context().newCDPSession(app.page);
+    // Parallel Electron windows otherwise steal focus from CDP touch input.
+    await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     await client.send("Emulation.setTouchEmulationEnabled", { enabled: true });
     const tap = async ({ x, y }: { x: number; y: number }) => {
       await client.send("Input.dispatchTouchEvent", {
@@ -1323,6 +1325,7 @@ e2eTest(
       .poll(async () => await app.server.rpc.workspace.readFile({ path }))
       .toContain("Tap here to edit. changed");
     await client.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+    await client.send("Emulation.setFocusEmulationEnabled", { enabled: false });
     await client.detach();
     await app.page.getByRole("tab", { name: path }).click();
   },
@@ -1891,8 +1894,8 @@ e2eTest(
       .poll(async () => await app.server.rpc.workspace.readFile({ path }))
       .toContain("- [ ] Share plan");
 
-    await editor.getByText("After", { exact: true }).click();
-    await app.page.keyboard.press("End");
+    await editor.press("ControlOrMeta+a");
+    await app.page.keyboard.press("ArrowRight");
     await app.page.keyboard.press("Enter");
     await app.page.keyboard.type("[ ] Review plan");
     await expect(
