@@ -92,6 +92,10 @@ export class ElectronHost implements HostApi {
     ).toString();
   }
 
+  getDesktopFrameUrl() {
+    return new URL("../desktop/", this.extensionBaseUrl).toString();
+  }
+
   async getAppInfo() {
     return await this.desktopBridge.getAppInfo().catch(
       (cause) =>

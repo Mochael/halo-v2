@@ -6,6 +6,9 @@ WORKDIR /opt/halo
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends poppler-utils python3 python3-pip python3-venv \
+       tigervnc-standalone-server novnc websockify dbus-x11 xfwm4 xfce4-panel \
+       xfce4-settings thunar xfce4-terminal x11-utils x11-xserver-utils \
+       adwaita-icon-theme fonts-dejavu xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install --global pnpm@12.1.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -33,12 +36,17 @@ ARG PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false
 RUN pnpm exec playwright install --with-deps chromium --no-shell
 COPY packages ./packages
 COPY apps/workspace-server ./apps/workspace-server
+RUN cp apps/workspace-server/desktop/index.html /usr/share/novnc/index.html \
+    && cp apps/workspace-server/desktop/chromium.sh /usr/local/bin/halo-chromium \
+    && chmod +x /usr/local/bin/halo-chromium
 RUN pnpm --filter @get-halo/extension-sdk run build \
     && pnpm --filter @get-halo/extension-tools run build
 # The workspace CLI builds and packs the local SDK when authoring extensions.
 RUN chown -R node:node /opt/halo/packages
 
 ENV HOME=/home/node \
+    DISPLAY=:1 \
+    HALO_DESKTOP_ORIGIN=http://127.0.0.1:6080 \
     VIRTUAL_ENV=/opt/halo/.venv \
     XDG_CONFIG_HOME=/home/node/.config \
     XDG_DATA_HOME=/home/node/.local/share \
@@ -55,7 +63,7 @@ USER node
 WORKDIR /home/node/documents
 HEALTHCHECK --interval=30s --start-period=120s --timeout=15s \
     CMD node --import /opt/halo/node_modules/tsx/dist/loader.mjs /opt/halo/packages/halo-cli/src/cli.ts status --json
-ENTRYPOINT ["node", "--import", "/opt/halo/node_modules/tsx/dist/loader.mjs", "/opt/halo/apps/workspace-server/src/main.ts"]
+ENTRYPOINT ["dbus-run-session", "--", "bash", "/opt/halo/apps/workspace-server/desktop/start.sh"]
 CMD ["/opt/halo/apps/workspace-server/container.json"]
 
 ARG VERSION=dev

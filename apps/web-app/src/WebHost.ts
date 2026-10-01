@@ -129,6 +129,10 @@ export class WebHost implements HostApi {
     ).toString();
   }
 
+  getDesktopFrameUrl() {
+    return new URL("/workspace/desktop/", window.location.origin).toString();
+  }
+
   async connectIntegration(
     input: Parameters<HostApi["connectIntegration"]>[0],
   ) {

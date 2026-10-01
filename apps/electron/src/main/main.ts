@@ -189,19 +189,25 @@ async function getWorkspaceConnection(
   if (connection instanceof Error || connection === undefined)
     return connection;
 
-  authorizeExtensionRequests(connection);
+  authorizeWorkspaceViews(connection);
   return connection;
 }
 
-function authorizeExtensionRequests(connection: HaloRpcConnection) {
+function authorizeWorkspaceViews(connection: HaloRpcConnection) {
   const webSocketOrigin = new URL(connection.origin);
   webSocketOrigin.protocol =
     webSocketOrigin.protocol === "http:" ? "ws:" : "wss:";
+  const desktopPath = new URL(
+    "../desktop/",
+    new URL(`${connection.extensionPath}/`, connection.origin),
+  ).pathname;
   electronSession.defaultSession.webRequest.onBeforeSendHeaders(
     {
       urls: [
         `${connection.origin}${connection.extensionPath}/*`,
         `${webSocketOrigin.origin}${connection.extensionPath}/*`,
+        `${connection.origin}${desktopPath}*`,
+        `${webSocketOrigin.origin}${desktopPath}*`,
       ],
     },
     (details, callback) => {

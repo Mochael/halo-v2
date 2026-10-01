@@ -23,6 +23,7 @@ import { anyAbortSignal } from "@orpc/shared";
 import { OAuth2Client } from "google-auth-library";
 import * as errore from "errore";
 import { handleOAuthCallback } from "./oauth.js";
+import { DesktopProxy } from "./DesktopProxy.js";
 import { haloRpcRouter, type HaloContext } from "./router.js";
 import { extensionToolRouter } from "../extensions/extensionsRouter.js";
 import {
@@ -112,7 +113,9 @@ export function serveHaloHttp(options: {
   context: HaloContext;
   corsOrigins: readonly string[];
   gateway?: WorkspaceGatewayIdentity;
+  desktopOrigin?: string;
 }): ServingHaloHttp {
+  const desktop = new DesktopProxy({ origin: options.desktopOrigin });
   const shutdown = new AbortController();
   const pendingRequests = new Set<Promise<void>>();
   const pendingUpgrades = new Set<Promise<void>>();
@@ -223,6 +226,10 @@ export function serveHaloHttp(options: {
       return;
     }
 
+    if (url.pathname.startsWith("/desktop/")) {
+      await desktop.serve(request, response);
+      return;
+    }
     if (isExtensionProxyRequest(url)) {
       await serveExtensionRequest({
         extensions: options.context.extensions,
@@ -288,6 +295,10 @@ export function serveHaloHttp(options: {
       request.url === undefined ? "/" : request.url,
       "http://localhost",
     );
+    if (url.pathname === "/desktop/stream") {
+      await desktop.upgrade(request, socket, head);
+      return;
+    }
     if (!isExtensionProxyRequest(url)) {
       respondToUpgrade(socket, 404);
       return;

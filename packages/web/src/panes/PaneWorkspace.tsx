@@ -59,6 +59,7 @@ export function PaneWorkspace({ sessions }: { sessions: SessionSummary[] }) {
     ),
   });
   function tabTitle(tab: WorkspaceTab) {
+    if (tab.path === "/desktop") return "Desktop";
     if (tab.path.startsWith("/draft/")) return "New session";
     if (tab.path.startsWith("/sessions/")) {
       const id = tab.path.slice(10);
