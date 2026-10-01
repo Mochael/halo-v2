@@ -23,6 +23,12 @@ const togetherApiKeySecretId = "together-ai-api-key";
 const controlPlaneDomain = configuration.require("controlPlaneDomain");
 const controlPlaneOrigin = `https://${controlPlaneDomain}`;
 
+const vertexAi = new gcp.projects.Service("vertex-ai", {
+  project,
+  service: "aiplatform.googleapis.com",
+  disableOnDestroy: false,
+});
+
 const network = new gcp.compute.Network("network", {
   name,
   autoCreateSubnetworks: false,
@@ -155,8 +161,18 @@ const workspaceLogAccess = new gcp.projects.IAMMember("workspace-logs", {
   role: "roles/logging.logWriter",
   member: pulumi.interpolate`serviceAccount:${workspaceRuntime.email}`,
 });
-const workspaceInferenceAccess = new gcp.secretmanager.SecretIamMember(
+// IAM is deployed before VMs are replaced; keep Vertex access until all run Together.
+const workspaceInferenceAccess = new gcp.projects.IAMMember(
   "workspace-inference",
+  {
+    project,
+    role: "roles/aiplatform.user",
+    member: pulumi.interpolate`serviceAccount:${workspaceRuntime.email}`,
+  },
+  { dependsOn: [vertexAi] },
+);
+const workspaceTogetherApiKeyAccess = new gcp.secretmanager.SecretIamMember(
+  "workspace-together-api-key",
   {
     project,
     secretId: togetherApiKeySecretId,
@@ -238,6 +254,7 @@ const workspaceTemplate = new gcp.compute.InstanceTemplate(
     dependsOn: [
       workspaceImageAccess,
       workspaceInferenceAccess,
+      workspaceTogetherApiKeyAccess,
       workspaceLogAccess,
       workspaceGoogleWebClientIdAccess,
       workspaceGoogleWebClientSecretAccess,

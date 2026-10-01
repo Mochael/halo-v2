@@ -36,6 +36,12 @@ new gcp.projects.IAMMember("runtime-logs", {
   role: "roles/logging.logWriter",
   member: pulumi.interpolate`serviceAccount:${identity.email}`,
 });
+// Keep access for the running Gemini image until the VM is updated to Together.
+const vertexAiAccess = new gcp.projects.IAMMember("vertex-ai", {
+  project,
+  role: "roles/aiplatform.user",
+  member: pulumi.interpolate`serviceAccount:${identity.email}`,
+});
 const togetherApiKeyAccess = new gcp.secretmanager.SecretIamMember(
   "together-api-key",
   {
@@ -112,6 +118,7 @@ const instance = new gcp.compute.Instance(
   {
     dependsOn: [
       imageAccess,
+      vertexAiAccess,
       togetherApiKeyAccess,
       googleWebClientIdAccess,
       googleWebClientSecretAccess,
