@@ -25,7 +25,7 @@ Read the reference for the work you are doing:
 | Buttons          | [buttons.md](references/components/buttons.md) (`Button`, `Overlay`, `Dialog`)               |
 | Drawer           | [drawer.md](references/components/drawer.md)                                                 |
 | Prose            | [prose.md](references/components/prose.md) (`Prose`, `H1`–`H4`, `P`, lists, `Label`, `Link`) |
-| Editor           | [editor.md](references/components/editor.md)                                                 |
+| Editor / MarkdownEditor | [editor.md](references/components/editor.md) (optional TipTap peers; separate imports) |
 | Thinking         | [thinking.md](references/components/thinking.md)                                             |
 | Crossfade        | [crossfade.md](references/components/crossfade.md)                                           |
 | Loading screen   | [loading-screen.md](references/components/loading-screen.md)                                 |
@@ -56,4 +56,4 @@ Read the reference for the work you are doing:
 | ------------ | ---------------------------------------------------------- | -------------------------------------------------- |
 | Calendar     | Three-pane schedule (mini month, week grid, event details) | [calendar.md](references/apps/calendar.md)         |
 | Email client | Two-pane inbox + reading pane                              | [email-client.md](references/apps/email-client.md) |
-| AI chat      | Mock streaming chat (Editor + AssistantMessage + Thinking) | [ai-chat.md](references/apps/ai-chat.md)           |
+| AI chat      | Mock streaming chat (MarkdownEditor + AssistantMessage + Thinking) | [ai-chat.md](references/apps/ai-chat.md)           |

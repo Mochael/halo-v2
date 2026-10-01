@@ -1,19 +1,19 @@
 import type React from "react";
 import { useState } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/core";
-import { EditorContent } from "@tiptap/react";
 import {
   backgroundColor,
   colors,
   flex,
   focusRing,
-  proseMaxWidth,
+  proseContainerStyle,
   radius,
   shadow,
   shadowVars,
   spacing,
   type ProseSize,
 } from "maui";
+import { Editor as MauiEditor } from "maui/editor";
 import { style, useStyles } from "purse-styles";
 import { proseInlineCode } from "./proseInlineCode.ts";
 import { useMarkdownEditor } from "../useMarkdownEditor.js";
@@ -101,7 +101,6 @@ export function Editor({
     autoFocus,
     onChange,
     placeholder,
-    size,
     editable,
     "aria-label": ariaLabel,
     onSubmit,
@@ -187,7 +186,7 @@ export function Editor({
         </div>
       )}
       {header}
-      <EditorContent editor={editor} />
+      <MauiEditor editor={editor} size={size} />
       {error}
       {actions ? <div className={actionsClassName}>{actions}</div> : undefined}
     </div>
@@ -195,6 +194,7 @@ export function Editor({
 }
 
 const editorShellClass = style(
+  proseContainerStyle,
   radius.lg,
   shadow.subtle,
   spacing.padding({ x: 4, y: 3 }),
@@ -204,7 +204,6 @@ const editorShellClass = style(
     cursor: "text",
     position: "relative",
     backgroundColor: backgroundColor.element,
-    maxWidth: proseMaxWidth,
     minWidth: 0,
     "& .ProseMirror": {
       outline: "none",

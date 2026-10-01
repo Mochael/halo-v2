@@ -5,7 +5,7 @@ import Placeholder from "@tiptap/extension-placeholder";
 import Paragraph from "@tiptap/extension-paragraph";
 import { useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { colors, monoFontFamily, proseHtml, type ProseSize } from "maui";
+import { colors, monoFontFamily } from "maui";
 import { style, useStyles } from "purse-styles";
 import { useRefCurrent } from "./agent/useRefCurrent.js";
 import { ListEditing } from "./ListEditing.js";
@@ -35,7 +35,6 @@ type MarkdownEditorOptions = {
   autoFocus?: boolean;
   onChange?: (markdown: string) => void;
   placeholder?: string;
-  size?: ProseSize;
   editable?: boolean;
   "aria-label"?: string;
   onSubmit?: () => void;
@@ -50,7 +49,6 @@ export function useMarkdownEditor({
   autoFocus = false,
   onChange,
   placeholder = "Write…",
-  size = "md",
   editable = true,
   "aria-label": ariaLabel = "Editor",
   onSubmit,
@@ -59,7 +57,7 @@ export function useMarkdownEditor({
   inlineCodeClassName,
   extensions = [],
 }: MarkdownEditorOptions) {
-  const proseClassName = useStyles(proseHtml(size), syntaxStyle);
+  const syntaxClassName = useStyles(syntaxStyle);
   const onChangeRef = useRefCurrent(onChange);
   const onSubmitRef = useRefCurrent(onSubmit);
   const onSelectionUpdateRef = useRefCurrent(onSelectionUpdate);
@@ -95,7 +93,7 @@ export function useMarkdownEditor({
     editorProps: {
       attributes: {
         "aria-label": ariaLabel,
-        class: `maui-editor-prose ${proseClassName}`,
+        class: syntaxClassName,
       },
       handleKeyDown: (_view, event) => {
         if (onKeyDownRef.current?.(event)) return true;
@@ -128,11 +126,11 @@ export function useMarkdownEditor({
         attributes: {
           ...editor.options.editorProps?.attributes,
           "aria-label": ariaLabel,
-          class: `maui-editor-prose ${proseClassName}`,
+          class: syntaxClassName,
         },
       },
     });
-  }, [editor, ariaLabel, proseClassName]);
+  }, [editor, ariaLabel, syntaxClassName]);
 
   useEffect(() => {
     if (!editor) return;

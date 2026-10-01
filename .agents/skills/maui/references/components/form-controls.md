@@ -11,7 +11,7 @@ All fields are 28px tall, full width of the parent, `shadow.subtle` except `Quie
 <QuietTextField aria-label="Filter" placeholder="Filter" value={f} onChange={setF} />
 ```
 
-Invalid (unfocused) adds a red 1px ring on top of `shadow.subtle`. Placeholders are italic `gray[8]`. Cap width in the parent (`maxWidth: 240px` is the gallery default).
+`NumberField` uses tabular numerals so the value does not shift as you step. Invalid (unfocused) adds a red 1px ring on top of `shadow.subtle`. Placeholders are italic `gray[8]`. Cap width in the parent (`maxWidth: 240px` is the gallery default).
 
 ## `Checkbox`
 

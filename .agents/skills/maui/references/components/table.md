@@ -34,6 +34,7 @@ Rules:
 
 - Mark the identifying column with `isRowHeader` (name/id, not a checkbox).
 - `align` on `TableHead` / `TableCell`: `"start"` | `"center"` | `"end"`.
+- `TableHead` and `TableCell` use tabular numerals (`text({ tabular: true })`).
 - Selection is **opt-in**. Without `selectionMode`, rows do not highlight on hover.
 - `selectionMode="multiple"` inserts a leading checkbox column (select-all in the header). Hover/selected washes follow `data-selection-mode`.
 - `TableBody` default empty state is “No results.” Pass `renderEmptyState`.

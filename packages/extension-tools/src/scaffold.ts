@@ -14,7 +14,7 @@ export async function scaffoldExtension(args: {
 }) {
   const packages =
     args.packages === undefined
-      ? { sdk: "0.2.0", tools: "0.2.0" }
+      ? { sdk: "0.2.0", tools: "0.2.1" }
       : args.packages;
   const created = await mkdir(args.directory).catch(
     (cause) => new ExtensionScaffoldError({ directory: args.directory, cause }),
@@ -35,7 +35,7 @@ export async function scaffoldExtension(args: {
           "@get-halo/extension-sdk": packages.sdk,
           react: "^19.2.8",
           "react-dom": "^19.2.8",
-          maui: "npm:@tanishqkancharla/maui@0.0.33",
+          maui: "npm:@tanishqkancharla/maui@0.0.38",
           errore: "^0.14.1",
         },
         devDependencies: {
