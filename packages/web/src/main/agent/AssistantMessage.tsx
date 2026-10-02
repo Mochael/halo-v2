@@ -1,15 +1,10 @@
 import {
   isValidElement,
-  useMemo,
   type ComponentPropsWithoutRef,
   type ReactNode,
 } from "react";
 import type { Components } from "streamdown";
-import {
-  Streamdown,
-  defaultRehypePlugins,
-  useIsCodeFenceIncomplete,
-} from "streamdown";
+import { Streamdown, useIsCodeFenceIncomplete } from "streamdown";
 import { code } from "@streamdown/code";
 import {
   Code,
@@ -25,10 +20,6 @@ import {
   type ProseSize,
 } from "maui";
 import { style, useStyles } from "purse-styles";
-import {
-  inlineCodeAnimateTag,
-  rehypeInlineCodeAnimate,
-} from "./rehypeInlineCodeAnimate.ts";
 // Streamdown ships required markdown chrome as a CSS file.
 import "streamdown/styles.css";
 
@@ -118,8 +109,6 @@ const streamdownComponents: Components = {
   em: ({ node: _node, className: _className, ...props }) => <em {...props} />,
   hr: ({ node: _node, className: _className, ...props }) => <hr {...props} />,
   inlineCode: InlineCode,
-  // Retagged inline code while streaming (see rehypeInlineCodeAnimate).
-  [inlineCodeAnimateTag]: InlineCode,
   code: MauiFencedCode,
 };
 
@@ -131,12 +120,6 @@ function InlineCode({
 }: ComponentPropsWithoutRef<"code"> & { node?: unknown }) {
   return <Code {...props}>{children}</Code>;
 }
-
-/** Defaults + inline-code retag so animate can stagger inline code with prose. */
-const streamingRehypePlugins = [
-  ...Object.values(defaultRehypePlugins),
-  rehypeInlineCodeAnimate,
-];
 
 /**
  * Streaming-friendly assistant message. Renders markdown with Streamdown and
@@ -154,10 +137,6 @@ export function AssistantMessage({
     streamdownRootClass,
     isAnimating ? proseStreamingMarkers : undefined,
   );
-  const rehypePlugins = useMemo(
-    () => (isAnimating ? streamingRehypePlugins : undefined),
-    [isAnimating],
-  );
 
   return (
     <div
@@ -169,7 +148,6 @@ export function AssistantMessage({
         className={streamdownClassName}
         components={streamdownComponents}
         plugins={{ code }}
-        rehypePlugins={rehypePlugins}
         // `animated` must stay stably enabled; only `isAnimating` toggles.
         // Flipping `animated`/`mode` with the stream resets stagger state and
         // makes new blocks (blockquotes, lists) pop in out of order.
