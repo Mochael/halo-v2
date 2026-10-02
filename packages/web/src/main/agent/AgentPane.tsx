@@ -158,10 +158,9 @@ function ChatPane({
     offline: "You're offline. Halo will reconnect when you're back online.",
     synchronizing: "Connection restored. Updating your chat…",
     connected: undefined,
-    authentication:
-      "Sign in to reconnect using the connection menu in the sidebar.",
+    authentication: "Click “Sign in required” in the sidebar to reconnect.",
     incompatible:
-      "An app or server update is needed. Open the connection menu in the sidebar for details.",
+      "An app or server update is needed. Click the connection status in the sidebar for details.",
   }[connection.status];
   const banner = useStyles(
     styles.banner,
