@@ -4,7 +4,7 @@ import type { WorkspaceConfig } from "@get-halo/config/controlPlane";
 import { readWorkspaceServerConnection } from "@get-halo/shared/WorkspaceServerConnection";
 import * as errore from "errore";
 import type { DatabaseService } from "../DatabaseService.js";
-import { provisionGcpWorkspace } from "./gcpProvisioning.js";
+import { provisionGcpWorkspace } from "./provider/gcp/gcpProvisioning.js";
 
 class WorkspaceServiceError extends errore.createTaggedError({
   name: "WorkspaceServiceError",

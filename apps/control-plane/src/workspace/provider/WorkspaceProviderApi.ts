@@ -1,5 +1,3 @@
-/* oxlint-disable anti-slop/no-unused-exports -- Contract-only review commit; remove when the provider implementation and control-plane wiring land in the next two commits. */
-
 /** Halo identity only; each provider owns its VM naming and resource lookup. */
 export type WorkspaceProviderInput = {
   workspaceId: string;
