@@ -21,6 +21,12 @@ export function DevLogs({ showHeading = true }: { showHeading?: boolean }) {
             The Personal Computing Revolution Hasn&apos;t Happened Yet.
           </Link>
         </P>
+        <P>
+          <Text tabular>0002</Text> -{" "}
+          <Link href="https://www.youtube.com/watch?v=7TK5mVR-zoI">
+            Taking notes in the AI Era
+          </Link>
+        </P>
       </Flex>
     </section>
   );
