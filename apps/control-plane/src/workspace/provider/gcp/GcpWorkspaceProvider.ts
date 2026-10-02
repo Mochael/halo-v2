@@ -5,9 +5,7 @@ import type {
   WorkspaceProviderInput,
 } from "../WorkspaceProviderApi.js";
 
-// oxlint-disable-next-line anti-slop/no-unused-exports -- The next review commit wires providers into the control plane.
 export class GcpWorkspaceProvider implements WorkspaceProviderApi {
-  readonly providerId = "gcp";
   // GCP has no explicit pause/resume capability in Halo yet.
   readonly pause = undefined;
   readonly resume = undefined;

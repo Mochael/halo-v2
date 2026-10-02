@@ -22,9 +22,6 @@ export type WorkspaceProviderConnection = {
  * Implementations return expected failures as Error values.
  */
 export interface WorkspaceProviderApi {
-  /** Stable, unique key used to register and select this configured provider. */
-  readonly providerId: string;
-
   /**
    * Idempotently provision or reuse the workspace and bring it online.
    * Concurrent calls for the same identity must not create separate workspaces.
