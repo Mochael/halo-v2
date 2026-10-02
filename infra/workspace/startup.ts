@@ -1,3 +1,5 @@
+import desktopSeccomp from "./desktop-seccomp.json" with { type: "json" };
+
 export function workspaceStartup(ctx: {
   gateway?: true;
   image: string;
@@ -33,8 +35,17 @@ previous_image=$(docker inspect --format '{{.Config.Image}}' halo-workspace 2>/d
 curl -fsS -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token | jq -r .access_token | docker login --username oauth2accesstoken --password-stdin https://${ctx.registry}
 docker pull ${ctx.image}
 
+# Docker's default filter blocks the namespaces Chrome needs for its sandbox.
+mkdir -p /etc/halo
+cat > /etc/halo/desktop-seccomp.json <<'SECCOMP'
+${JSON.stringify(desktopSeccomp)}
+SECCOMP
+
 # A workflow retry or VM boot can reuse an already healthy release.
-if [ "$(docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' halo-workspace 2>/dev/null || true)" = "${ctx.image} healthy" ]; then
+if [ "$(docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' halo-workspace 2>/dev/null || true)" = "${ctx.image} healthy" ] \
+  && docker inspect --format '{{json .HostConfig.SecurityOpt}}' halo-workspace \
+    | jq -e --slurpfile expected /etc/halo/desktop-seccomp.json \
+      '(. // []) | map(select(startswith("seccomp={")) | sub("^seccomp="; "") | fromjson) | any(. == $expected[0])' >/dev/null; then
   status=$(docker exec halo-workspace node --import /opt/halo/node_modules/tsx/dist/loader.mjs /opt/halo/packages/halo-cli/src/cli.ts status --json)
   protocols=$(jq -cer '.supportedProtocols // [.protocolVersion]' <<< "$status")
   revision=$(jq -er '.build.revision' <<< "$status")
@@ -114,7 +125,7 @@ RestartSec=5
 TimeoutStartSec=600
 TimeoutStopSec=45
 ExecStartPre=/usr/local/bin/halo-workspace-config
-ExecStart=/usr/bin/docker run --rm --name halo-workspace --network host --init --shm-size=1g --volume /mnt/halo/workspace:/home/node ${ctx.image} /home/node/.halo/workspace-server.json
+ExecStart=/usr/bin/docker run --rm --name halo-workspace --network host --init --shm-size=1g --security-opt seccomp=/etc/halo/desktop-seccomp.json --volume /mnt/halo/workspace:/home/node ${ctx.image} /home/node/.halo/workspace-server.json
 ExecStop=/usr/bin/docker stop --time 30 halo-workspace
 [Install]
 WantedBy=multi-user.target
