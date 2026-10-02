@@ -117,8 +117,10 @@ export function useAgentSession(
 
   async function prompt(input: ChatPrompt) {
     if (readySessionId === undefined || !enabled || readyApi !== api) {
-      const error = new PromptFailedError({ reason: "Session is not ready." });
-      setLocalError(error.message);
+      const error = new PromptFailedError({
+        reason: "This chat is still connecting. Please try again in a moment.",
+      });
+      if (enabled) setLocalError(error.message);
       return error;
     }
     setLocalError(undefined);
@@ -128,11 +130,16 @@ export function useAgentSession(
       .catch(
         (e) =>
           new PromptFailedError({
-            reason: e instanceof Error ? e.message : String(e),
+            reason: "Couldn't send your message. Please try again.",
             cause: e,
           }),
       );
+    // The connection banner owns transport recovery. The server may still be
+    // running this prompt; reconnect the session stream without resending it.
+    if (errore.isAbortError(result?.cause)) return result;
     if (result instanceof PromptFailedError) {
+      if (service.getSnapshot().status !== "connected") return result;
+      console.warn("Failed to send message:", result);
       setLocalError(result.message);
       return result;
     }
@@ -185,6 +192,7 @@ export function useDraftAgentSession(
   onAccepted: (sessionId: string) => void,
 ): UseDraftAgentSessionResult {
   const api = useApi();
+  const { service } = useConnection();
   const queryClient = useQueryClient();
   const [localError, setLocalError] = useState<string | undefined>(undefined);
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
@@ -208,17 +216,28 @@ export function useDraftAgentSession(
 
   async function prompt(input: ChatPrompt) {
     setLocalError(undefined);
+    if (service.getSnapshot().status !== "connected")
+      return new PromptFailedError({
+        reason: "This chat is still connecting. Please try again in a moment.",
+      });
     const submittedTitle = chatPromptTitle(input);
     setTitle(submittedTitle);
     if (sessionIdRef.current === undefined) {
       const created = await api.sessions.create().catch(
         (e) =>
           new PromptFailedError({
-            reason: e instanceof Error ? e.message : String(e),
+            reason: "Couldn't start this chat. Please try again.",
             cause: e,
           }),
       );
+      if (
+        created instanceof PromptFailedError &&
+        errore.isAbortError(created.cause)
+      )
+        return created;
       if (created instanceof Error) {
+        if (service.getSnapshot().status !== "connected") return created;
+        console.warn("Failed to start chat:", created);
         setLocalError(created.message);
         setTitle(undefined);
         return created;
@@ -237,11 +256,14 @@ export function useDraftAgentSession(
       .catch(
         (e) =>
           new PromptFailedError({
-            reason: e instanceof Error ? e.message : String(e),
+            reason: "Couldn't send your message. Please try again.",
             cause: e,
           }),
       );
+    if (errore.isAbortError(result?.cause)) return result;
     if (result instanceof PromptFailedError) {
+      if (service.getSnapshot().status !== "connected") return result;
+      console.warn("Failed to send message:", result);
       setLocalError(result.message);
       setTitle(undefined);
       return result;

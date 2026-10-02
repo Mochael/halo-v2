@@ -38,6 +38,7 @@ import { Editor } from "./Editor.tsx";
 import { ExecutorConnectionCard } from "./ExecutorConnectionCard.tsx";
 import { ToolActivity } from "./ToolActivity.tsx";
 import { useTabFindSource } from "../../panes/TabFind.js";
+import { useConnection } from "../../api/ConnectionContext.js";
 import {
   useWorkspacePathsQuery,
   useWorkspaceQuery,
@@ -123,6 +124,7 @@ function ChatPane({
   abort: () => Promise<void | Error>;
 }) {
   const isActiveTab = useIsActiveTab();
+  const { state: connection } = useConnection();
   const [draft, setDraft] = useMessageDraft(draftKey);
   const [references, setReferences] =
     useState<ChatReference[]>(initialReferences);
@@ -150,7 +152,20 @@ function ChatPane({
   );
   const column = useStyles(styles.column);
   const composer = useStyles(styles.composer);
-  const liveStatus = useStyles(styles.liveStatus);
+  const connectionMessage = {
+    connecting: "Connecting to your workspace…",
+    reconnecting: "Connection lost. Automatically reconnecting…",
+    offline: "You're offline. Halo will reconnect when you're back online.",
+    synchronizing: "Connection restored. Updating your chat…",
+    connected: undefined,
+    authentication: "Click “Sign in required” in the sidebar to reconnect.",
+    incompatible:
+      "An app or server update is needed. Click the connection status in the sidebar for details.",
+  }[connection.status];
+  const banner = useStyles(
+    styles.banner,
+    connectionMessage === undefined ? styles.errorBanner : undefined,
+  );
   const sendButton = useStyles(styles.sendButton);
   const attachmentList = useStyles(styles.attachmentList);
   const attachmentChip = useStyles(styles.attachmentChip);
@@ -164,6 +179,7 @@ function ChatPane({
   useRestartWarning(attachments.length > 0 || references.length > 0);
   const showStop = state.activeRun !== undefined && !hasContent && !sending;
   const displayError = localError ?? error;
+  const bannerMessage = connectionMessage ?? displayError;
   const visibleOptimisticMessage =
     optimisticMessage !== undefined &&
     state.entries.some(
@@ -324,6 +340,14 @@ function ChatPane({
       {dragging ? (
         <div className={dropOverlay}>Drop files to attach</div>
       ) : undefined}
+      {bannerMessage === undefined ? undefined : (
+        <div
+          className={banner}
+          role={connectionMessage === undefined ? "alert" : "status"}
+        >
+          {bannerMessage}
+        </div>
+      )}
       <div className={body}>
         <div className={column}>
           {draftId === undefined || state.entries.length > 0 ? (
@@ -424,13 +448,6 @@ function ChatPane({
                     </ul>
                   ) : undefined}
                 </>
-              )
-            }
-            error={
-              displayError === undefined ? undefined : (
-                <div className={liveStatus} role="alert">
-                  {displayError}
-                </div>
               )
             }
             actions={
@@ -881,18 +898,21 @@ const styles = {
       background: `linear-gradient(to bottom, transparent, ${backgroundColor.app})`,
     },
   }),
-  liveStatus: style(
+  banner: style(
     flexItem({ size: "hug" }),
-    text({ size: "xs", fontWeight: 500, color: "highContrast" }),
-    spacing.padding({ x: 4, y: 2 }),
+    text({ size: "sm", fontWeight: 500, color: "highContrast" }),
+    spacing.padding({ x: 12, y: 4 }),
     {
-      color: "light-dark(#b42318, #ff9592)",
-      backgroundColor: "light-dark(#ffebe9, #3b1219)",
-      borderRadius: "8px",
+      color: colors.amber[11],
+      backgroundColor: colors.amber[3],
       whiteSpace: "pre-wrap",
       overflowWrap: "anywhere",
     },
   ),
+  errorBanner: style({
+    color: colors.red[11],
+    backgroundColor: colors.red[3],
+  }),
   userRow: style(flex({ justifyContent: "end" }), spacing.padding({ top: 3 }), {
     // position: "sticky",
     // top: 0,
