@@ -7,7 +7,20 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { backgroundColor, colors, radius, shadow, text } from "maui";
+import {
+  ArrowDown,
+  ArrowUp,
+  Button,
+  Close,
+  backgroundColor,
+  flex,
+  focusRing,
+  radius,
+  shadow,
+  shadowVars,
+  spacing,
+  text,
+} from "maui";
 import { style, useStyles } from "purse-styles";
 
 type FindSegment = { id: string; text: string };
@@ -69,7 +82,6 @@ export function TabFind({
   const input = useRef<HTMLInputElement>(null);
   const bar = useStyles(styles.bar);
   const field = useStyles(styles.field);
-  const button = useStyles(styles.button);
   const count = useStyles(styles.count);
   const matches = useMemo(
     () => findMatches(source?.segments ?? [], query),
@@ -222,30 +234,27 @@ export function TabFind({
               ? "0 results"
               : `${(selectedIndex % matches.length) + 1} of ${matches.length}`}
           </span>
-          <button
-            className={button}
-            type="button"
+          <Button
+            variant="quiet"
             aria-label="Previous match"
             onClick={() => navigate(-1)}
           >
-            ↑
-          </button>
-          <button
-            className={button}
-            type="button"
+            <ArrowUp size="sm" />
+          </Button>
+          <Button
+            variant="quiet"
             aria-label="Next match"
             onClick={() => navigate(1)}
           >
-            ↓
-          </button>
-          <button
-            className={button}
-            type="button"
+            <ArrowDown size="sm" />
+          </Button>
+          <Button
+            variant="quiet"
             aria-label="Close find"
             onClick={() => setOpen(false)}
           >
-            ×
-          </button>
+            <Close size="sm" />
+          </Button>
         </div>
       )}
     </FindContext>
@@ -253,36 +262,33 @@ export function TabFind({
 }
 
 const styles = {
-  bar: style(shadow.medium, radius.md, {
-    position: "absolute",
-    zIndex: 20,
-    top: 8,
-    right: 12,
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: 6,
-    backgroundColor: backgroundColor.element,
-  }),
-  field: style(text({ size: "sm" }), {
-    width: 200,
-    minWidth: 80,
-    padding: "4px 6px",
-    color: colors.gray[12],
-    backgroundColor: backgroundColor.app,
-    border: `1px solid ${colors.gray[7]}`,
-    borderRadius: 4,
-  }),
-  button: style(text({ size: "sm" }), {
-    minWidth: 26,
-    height: 26,
-    border: 0,
-    borderRadius: 4,
-    color: colors.gray[12],
-    backgroundColor: "transparent",
-    cursor: "pointer",
-    "&:hover": { backgroundColor: backgroundColor.elementHover },
-  }),
+  bar: style(
+    shadow.medium,
+    radius.md,
+    flex({ alignItems: "center", gap: 3 }),
+    spacing.padding({ all: 3 }),
+    {
+      position: "absolute",
+      zIndex: 20,
+      top: 8,
+      right: spacing.value(6),
+      backgroundColor: backgroundColor.element,
+    },
+  ),
+  field: style(
+    text({ size: "sm" }),
+    radius.sm,
+    shadow.subtle,
+    focusRing("&:focus-visible", shadowVars.subtle),
+    spacing.padding({ x: 4, y: 2 }),
+    {
+      width: 200,
+      minWidth: 80,
+      backgroundColor: backgroundColor.element,
+      border: 0,
+      "&:hover": { backgroundColor: backgroundColor.elementHover },
+    },
+  ),
   count: style(text({ size: "xs", color: "lowContrast" }), {
     whiteSpace: "nowrap",
   }),

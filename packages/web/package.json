@@ -39,13 +39,11 @@
     "maui": "npm:@tanishqkancharla/maui@0.0.38",
     "purse-styles": "^0.2.4",
     "react-aria-components": "1.21.0",
-    "streamdown": "^2.5.0",
-    "unified": "^11.0.5",
+    "streamdown": "2.6.0",
     "wouter": "^3.10.0"
   },
   "devDependencies": {
     "@get-halo/typescript-config": "workspace:*",
-    "@types/hast": "^3.0.5",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",
     "react": "^19.2.8",
