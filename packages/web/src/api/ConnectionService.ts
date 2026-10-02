@@ -34,6 +34,11 @@ class ConnectionTimeoutError extends errore.createTaggedError({
   message: "The server did not respond within ten seconds.",
   extends: errore.AbortError,
 }) {}
+export class ConnectionInterruptedError extends errore.createTaggedError({
+  name: "ConnectionInterruptedError",
+  message: "Connection lost. Automatically reconnecting…",
+  extends: errore.AbortError,
+}) {}
 
 export class ConnectionService {
   // The last usable client/data keep React panes mounted through outages.
@@ -69,8 +74,8 @@ export class ConnectionService {
     this.generation++;
     this.attempting = false;
     clearTimeout(this.timer);
-    this.controller?.abort();
-    this.probe?.abort();
+    this.controller?.abort(new ConnectionInterruptedError());
+    this.probe?.abort(new ConnectionInterruptedError());
     window.removeEventListener("online", this.retry);
     window.removeEventListener("offline", this.offline);
     document.removeEventListener("visibilitychange", this.foreground);
@@ -94,8 +99,8 @@ export class ConnectionService {
     clearTimeout(this.timer);
     this.generation++;
     this.attempting = false;
-    this.controller?.abort();
-    this.probe?.abort();
+    this.controller?.abort(new ConnectionInterruptedError());
+    this.probe?.abort(new ConnectionInterruptedError());
     this.publish({ ...this.state, status: "offline", error: undefined });
   };
 
@@ -121,8 +126,7 @@ export class ConnectionService {
       ].includes(rpcError.code)
     )
       return;
-    this.controller?.abort();
-    this.probe?.abort();
+    this.probe?.abort(new ConnectionInterruptedError({ cause: error }));
     this.generation++;
     this.failed(error);
   }
@@ -141,7 +145,7 @@ export class ConnectionService {
   private async connect() {
     this.attempts++;
     this.attempting = true;
-    this.controller?.abort();
+    this.controller?.abort(new ConnectionInterruptedError());
     const controller = new AbortController();
     this.controller = controller;
     const generation = ++this.generation;
@@ -218,7 +222,7 @@ export class ConnectionService {
   }
 
   private failed(error?: Error) {
-    this.controller?.abort();
+    this.controller?.abort(new ConnectionInterruptedError({ cause: error }));
     const incompatible =
       error === undefined
         ? undefined
