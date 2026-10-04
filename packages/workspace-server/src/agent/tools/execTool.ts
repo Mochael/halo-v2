@@ -1,80 +1,102 @@
 import type { ExecToolCall } from "@get-halo/client";
-import type { AgentHarnessTool } from "@earendil-works/pi-agent-core";
+import { copyJson } from "@earendil-works/chord";
+import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { formatExecuteResult } from "@executor-js/execution/core";
+import { SerialQueue } from "@get-halo/shared/SerialQueue";
 import { Type as SchemaType } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import { Type } from "typebox";
+import * as errore from "errore";
 import {
   ConnectionRequiredError,
   type ToolRuntime,
-  type ExecActivityUpdate,
 } from "../runtime/ToolRuntime.js";
 
 const execParameters = Type.Object({
   js: Type.String({ description: "JavaScript to run. tools is in scope." }),
 });
 
+class ToolProgressError extends errore.createTaggedError({
+  name: "ToolProgressError",
+  message: "Could not persist tool progress",
+}) {}
+
 export function createExecTool(input: {
   runtime: ToolRuntime;
   runtimeDescription: string;
   modelId: string;
-  onToolEvent?: (event: ExecActivityUpdate) => void;
-}): AgentHarnessTool<object | undefined> {
-  return {
+}): ToolRegistration<typeof execParameters> {
+  return defineTool({
     name: "exec",
-    label: "Exec",
     description: input.runtimeDescription,
     parameters: execParameters,
-    async execute(id, params, onUpdate, _toolContext, _invocation, context) {
-      // SAFETY: execParameters schema guarantees params has a string `js` property.
-      const { js } = params as { js: string };
+    replay: "unsafe",
+    async execute(args, api, context) {
+      const { js } = args;
       const toolCalls = new Map<string, ExecToolCall>();
+      const progressQueue = new SerialQueue();
+      const progressUpdates: Promise<void | ToolProgressError>[] = [];
       const result = await input.runtime.executeCode({
         code: js,
         signal: context.abortSignal,
         modelId: input.modelId,
-        parentToolCallId: id,
+        parentToolCallId: api.callId,
         onToolEvent: (event) => {
-          input.onToolEvent?.(event);
-          if (event.type === "tool.started") {
-            toolCalls.set(event.invocation.id, {
-              ...event.invocation,
-              status: "running",
-            });
-          } else {
-            const call = toolCalls.get(event.invocationId)!;
-            toolCalls.set(call.id, {
-              ...call,
-              status: event.isError ? "failed" : "completed",
-            });
-          }
-          // Pi persists progress only when the harness checkpoint option is set.
-          onUpdate(
-            {
-              content: [],
-              details: { toolCalls: [...toolCalls.values()] },
-            },
-            { checkpoint: true },
-          );
+          const update = progressQueue
+            .run(async () => {
+              if (event.type === "tool.started") {
+                toolCalls.set(event.invocation.id, {
+                  ...event.invocation,
+                  status: "running",
+                });
+              } else {
+                const call = toolCalls.get(event.invocationId)!;
+                toolCalls.set(call.id, {
+                  ...call,
+                  status: event.isError ? "failed" : "completed",
+                });
+              }
+              await api.details(
+                copyJson(
+                  { toolCalls: [...toolCalls.values()] },
+                  { omitUndefinedProperties: true },
+                ),
+                context,
+              );
+            })
+            .catch((cause) => new ToolProgressError({ cause }));
+          progressUpdates.push(update);
         },
       });
+      const progressResults = await Promise.all(progressUpdates);
+      const progressFailure = progressResults.find(
+        (progress) => progress instanceof Error,
+      );
+      // Pi's tool boundary requires thrown failures.
+      if (progressFailure instanceof Error) throw progressFailure;
       if (result instanceof ConnectionRequiredError) {
         return {
           content: [{ type: "text" as const, text: result.message }],
-          details: {
-            error: result.message,
-            toolCalls: [...toolCalls.values()],
-            connectionRequests: result.connectionRequests,
-          },
+          details: copyJson(
+            {
+              error: result.message,
+              toolCalls: [...toolCalls.values()],
+              connectionRequests: result.connectionRequests,
+            },
+            { omitUndefinedProperties: true },
+          ),
         };
       }
       if (result instanceof Error) {
         return {
           content: [{ type: "text" as const, text: result.message }],
-          details: {
-            error: result.message,
-            toolCalls: [...toolCalls.values()],
-          },
+          details: copyJson(
+            {
+              error: result.message,
+              toolCalls: [...toolCalls.values()],
+            },
+            { omitUndefinedProperties: true },
+          ),
           isError: true,
         };
       }
@@ -97,12 +119,15 @@ export function createExecTool(input: {
           : `${resultText}${logs}`;
       return {
         content: [{ type: "text" as const, text: fullText }],
-        details: {
-          ...formatted.structured,
-          toolCalls: [...toolCalls.values()],
-        },
+        details: copyJson(
+          {
+            ...formatted.structured,
+            toolCalls: [...toolCalls.values()],
+          },
+          { omitUndefinedProperties: true },
+        ),
         isError: formatted.isError,
       };
     },
-  };
+  });
 }

@@ -28,6 +28,10 @@ type RunOutcome = {
   sessionId?: string;
 };
 
+type RoutineSessionRegistry = Pick<SessionRegistry, "create" | "markDone"> & {
+  open(sessionId: string): Promise<Error | Pick<HaloAgentSession, "abort">>;
+};
+
 const interruptedMessage = "Halo stopped before the run finished.";
 // Keeps the end of long script output, where failures usually appear.
 const maxScriptOutputLength = 100_000;
@@ -40,15 +44,15 @@ export class RoutineRunner {
   >();
   private stopping = false;
   private readonly routines: RoutineService;
-  private readonly sessions: SessionRegistry;
-  private readonly filesystem: FilesystemService;
+  private readonly sessions: RoutineSessionRegistry;
+  private readonly filesystem: Pick<FilesystemService, "stat">;
   private readonly workspaceRoot: string;
   private readonly logger: Logger;
 
   constructor(ctx: {
     routines: RoutineService;
-    sessions: SessionRegistry;
-    filesystem: FilesystemService;
+    sessions: RoutineSessionRegistry;
+    filesystem: Pick<FilesystemService, "stat">;
     workspaceRoot: string;
     logger: Logger;
   }) {
@@ -58,6 +62,19 @@ export class RoutineRunner {
     this.filesystem = filesystem;
     this.workspaceRoot = workspaceRoot;
     this.logger = logger;
+  }
+
+  // Stops agents owned by unfinished routine runs before the registry can resume all sessions.
+  async recover() {
+    const sessionIds = await this.routines.runningSessionIds();
+    if (sessionIds instanceof Error) return sessionIds;
+    for (const sessionId of sessionIds) {
+      const session = await this.sessions.open(sessionId);
+      if (session instanceof Error) return session;
+      const aborted = await session.abort();
+      if (aborted instanceof Error) return aborted;
+    }
+    return await this.routines.recover();
   }
 
   // Records a run and starts it in the background. Returns the run record, or
@@ -247,8 +264,6 @@ export class RoutineRunner {
         status: "interrupted",
         error: signal.aborted ? interruptedMessage : "The run was stopped.",
       };
-    if (outcome.status === "suspended")
-      return { status: "failed", error: "The agent run was suspended." };
     return {
       status: "failed",
       error: outcome.error?.message ?? `The agent run was ${outcome.status}.`,

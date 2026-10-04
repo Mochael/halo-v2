@@ -1,4 +1,5 @@
 import { diff3Merge } from "node-diff3";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import * as errore from "errore";
@@ -124,10 +125,10 @@ async function resolveSection(ctx: {
   const stream = errore.try({
     try: () =>
       ctx.llm.stream(
-        {
+        normalizeContext({
           systemPrompt: markdownMergeSystemPrompt,
           messages: [{ role: "user", content: text, timestamp: Date.now() }],
-        },
+        }),
         { signal: ctx.signal, maxTokens: 8192 },
       ),
     catch: (cause) =>

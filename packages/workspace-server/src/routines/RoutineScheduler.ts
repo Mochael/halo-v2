@@ -28,10 +28,8 @@ export class RoutineScheduler {
     this.logger = logger;
   }
 
-  // Interrupts runs left by a previous process, skips missed occurrences, and arms the timer.
-  async start() {
-    const recovered = await this.routines.recover();
-    if (recovered instanceof Error) return recovered;
+  // Arms the timer after startup recovery has completed.
+  async start(): Promise<Error | undefined> {
     if (this.stopped) return;
     this.unsubscribe = this.routines.subscribe(() => this.arm());
     this.arm();

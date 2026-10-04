@@ -21,7 +21,7 @@ serverTest(
     const found = await server.rpc.testApi.invokeTool({
       path: "database.query",
       input: {
-        sql: "SELECT session_id AS sessionId, seq, json_extract(payload, '$.message.content') AS content FROM halo_session_entries WHERE type = 'message' AND instr(payload, ?) > 0",
+        sql: "SELECT session_id AS sessionId, id, json_extract(record, '$.data.message.content') AS content FROM entries WHERE instr(record, ?) > 0",
         parameters: ["America/Los_Angeles"],
       },
     });
@@ -29,7 +29,7 @@ serverTest(
       rows: [
         {
           sessionId: saved.sessionId,
-          seq: expect.any(Number),
+          id: expect.any(Number),
           content: "Use America/Los_Angeles for routine reminders.",
         },
       ],

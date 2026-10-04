@@ -5,6 +5,7 @@ import { sessionStatusMigration } from "./20260921194000-sessionStatus.js";
 import { routinesMigration } from "./20260925090000-routines.js";
 import { personalRoutinesMigration } from "./20260928090000-personalRoutines.js";
 import { routineSessionArchiveMigration } from "./20260928100000-routineSessionArchive.js";
+import { durableStorageMigration } from "./20261003100000-durableStorage.js";
 
 export const workspaceMigrations = [
   initialWorkspaceMigration,
@@ -13,4 +14,5 @@ export const workspaceMigrations = [
   routinesMigration,
   personalRoutinesMigration,
   routineSessionArchiveMigration,
+  durableStorageMigration,
 ] satisfies readonly Migration[];

@@ -243,6 +243,20 @@ export class RoutineService {
     return rows.map(runFromRow);
   }
 
+  async runningSessionIds() {
+    const rows = await this.database.access((connection) => {
+      // SAFETY: The projection matches the halo_routine_runs table.
+      return connection
+        .prepare(
+          `SELECT session_id FROM halo_routine_runs
+           WHERE status = 'running' AND session_id IS NOT NULL`,
+        )
+        .all() as { session_id: string }[];
+    });
+    if (rows instanceof Error) return rows;
+    return rows.map((row) => row.session_id);
+  }
+
   // Starts one run record. A scheduled run claims the due occurrence and advances the schedule
   // in the same step; it returns undefined when nothing is due, such as after a pause.
   async beginRun(input: {

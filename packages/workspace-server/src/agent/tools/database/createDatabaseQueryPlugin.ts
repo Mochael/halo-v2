@@ -49,7 +49,7 @@ export function createDatabaseQueryPlugin(
       defineHaloTool({
         name: "query",
         description:
-          "Run one read-only SQL SELECT query against Halo's current workspace database. Use ? placeholders and parameters for values. Returns at most 50 rows and 30,000 characters; large cells are shortened. Query sqlite_schema for table definitions. This includes saved conversations in halo_session_entries.",
+          "Run one read-only SQL SELECT query against Halo's current workspace database. Use ? placeholders and parameters for values. Returns at most 50 rows and 30,000 characters; large cells are shortened. Query sqlite_schema for table definitions. Saved conversation entries are JSON records in entries.record.",
         inputSchema: Type.Object({
           sql: Type.String({ minLength: 1, maxLength: 10_000 }),
           parameters: Type.Optional(

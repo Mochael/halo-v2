@@ -1,116 +1,116 @@
-import {
-  StorageBackedSession,
-  createForkSnapshot,
-  value,
-  type Session,
-  type SessionMetadata,
-  type SessionCreateOptions,
-  type ForkOptions,
-  type Entry,
-  type StoredValue,
-  type CommittedWrite,
-} from "@earendil-works/pi-agent-core/harness/session";
-import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core";
+// oxlint-disable unicorn/no-null -- SQL uses NULL for an absent read receipt.
+// oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- Queries project repository-owned tables into matching row types.
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { uuidv7 } from "@earendil-works/pi-ai";
-import type { Database } from "@tursodatabase/database/compat";
-import * as errore from "errore";
 import type { DatabaseClient } from "./DatabaseClient.js";
-import type { SessionProductFields, SessionRepoApi } from "./SessionRepoApi.js";
-import { TursoStorage, applySessionWrites } from "./TursoStorage.js";
-import {
-  decodeSessionJson,
-  emptySessionStats,
-  readSessionRow,
-  SessionBackendError,
-} from "./sessionSchema.js";
+import type {
+  SessionHandle,
+  SessionData,
+  SessionMetadata,
+  SessionProductFields,
+  SessionRepoApi,
+} from "./SessionRepoApi.js";
+import { TursoStorage } from "./TursoStorage.js";
+import { decodeSessionJson, SessionBackendError } from "./sessionSchema.js";
 
 type SessionProductFieldsRow = {
   id: string;
   marked_done: number;
   read_receipt_cursor_id: string | null;
 };
+type MetadataRow = { metadata: string };
 
 export class TursoSessionRepo implements SessionRepoApi {
   private readonly reserved = new Set<string>();
-  private readonly sessions = new Set<Session>();
+  private readonly storages = new Set<TursoStorage>();
   private closed = false;
 
   constructor(private readonly database: DatabaseClient) {}
 
-  async create(options: SessionCreateOptions | undefined) {
+  async create(options?: { id?: string }) {
     const createdAt = Date.now();
-    const id = options?.id === undefined ? uuidv7(createdAt) : options.id;
-    return await this.openSession(id, (connection) => {
-      const metadata: SessionMetadata = {
-        id,
-        createdAt,
-        storageVersion: 1,
-      };
-      if (options?.parentSessionId !== undefined)
-        metadata.parentSessionId = options.parentSessionId;
+    const sessionId = options?.id ?? uuidv7(createdAt);
+    this.reserve(sessionId);
+    const inserted = await this.database.access((connection) =>
       connection
-        .prepare(
-          "INSERT INTO halo_sessions (id, metadata, next_seq, stats) VALUES (?, ?, ?, ?)",
-        )
-        .run(
-          id,
-          JSON.stringify(metadata),
-          1,
-          JSON.stringify(emptySessionStats()),
-        );
-      return metadata;
-    });
+        .prepare("INSERT INTO halo_sessions (id, metadata) VALUES (?, ?)")
+        .run(sessionId, JSON.stringify({ id: sessionId, createdAt })),
+    );
+    if (inserted instanceof Error) {
+      this.reserved.delete(sessionId);
+      throw inserted;
+    }
+    return await this.openReserved({ id: sessionId, createdAt });
   }
 
   async open(metadata: SessionMetadata) {
-    return await this.openSession(
-      metadata.id,
-      (connection) => readSessionRow(connection, metadata.id).metadata,
-    );
+    this.reserve(metadata.id);
+    const loaded = await this.database.access((connection) => {
+      const row = connection
+        .prepare("SELECT metadata FROM halo_sessions WHERE id = ?")
+        .get(metadata.id) as MetadataRow | undefined;
+      if (row === undefined)
+        throw new SessionBackendError({
+          detail: `Unknown session ${metadata.id}`,
+        });
+      const persisted = decodeSessionJson<SessionMetadata>(row.metadata);
+      return { id: persisted.id, createdAt: persisted.createdAt };
+    });
+    if (loaded instanceof Error) {
+      this.reserved.delete(metadata.id);
+      throw loaded;
+    }
+    return await this.openReserved(loaded);
   }
 
   async list() {
     this.assertOpen();
-    const result = await this.database.access((connection) => {
-      // SAFETY: The projection matches the session schema owned by workspace migrations.
-      const rows = connection
-        .prepare("SELECT metadata FROM halo_sessions")
-        .all() as { metadata: string }[];
-      return rows
-        .map((row) => decodeSessionJson<SessionMetadata>(row.metadata))
-        .toSorted((a, b) => b.createdAt - a.createdAt);
+    const listed = await this.database.access((connection) =>
+      (
+        connection
+          .prepare("SELECT metadata FROM halo_sessions")
+          .all() as MetadataRow[]
+      )
+        .map(({ metadata }) => decodeSessionJson<SessionMetadata>(metadata))
+        .map(({ id, createdAt }) => ({ id, createdAt }))
+        .toSorted((a, b) => b.createdAt - a.createdAt),
+    );
+    if (listed instanceof Error) throw listed;
+    return listed;
+  }
+
+  async read(sessionId: string): Promise<SessionData> {
+    this.assertOpen();
+    return await TursoStorage.readSession({
+      database: this.database,
+      sessionId,
     });
-    if (result instanceof Error) throw result;
-    return result;
   }
 
   async listProductFields() {
-    return await this.database.access((connection) => {
-      // SAFETY: The projection matches the session table owned by workspace migrations.
-      const rows = connection
-        .prepare(
-          "SELECT id, marked_done, read_receipt_cursor_id FROM halo_sessions",
-        )
-        .all() as SessionProductFieldsRow[];
-      return new Map<string, SessionProductFields>(
-        rows.map((row) => [row.id, decodeSessionProductFields(row)]),
-      );
-    });
+    return await this.database.access(
+      (connection) =>
+        new Map<string, SessionProductFields>(
+          (
+            connection
+              .prepare(
+                "SELECT id, marked_done, read_receipt_cursor_id FROM halo_sessions",
+              )
+              .all() as SessionProductFieldsRow[]
+          ).map((row) => [row.id, decodeProductFields(row)]),
+        ),
+    );
   }
-
   async getProductFields(sessionId: string) {
     return await this.database.access((connection) => {
-      // SAFETY: The projection matches the session table owned by workspace migrations.
       const row = connection
         .prepare(
           "SELECT id, marked_done, read_receipt_cursor_id FROM halo_sessions WHERE id = ?",
         )
         .get(sessionId) as SessionProductFieldsRow | undefined;
-      if (row === undefined) return;
-      return decodeSessionProductFields(row);
+      return row === undefined ? undefined : decodeProductFields(row);
     });
   }
-
   async setMarkedDone(input: { sessionId: string; markedDone: boolean }) {
     return await this.database.access((connection) => {
       connection
@@ -118,179 +118,81 @@ export class TursoSessionRepo implements SessionRepoApi {
         .run(input.markedDone ? 1 : 0, input.sessionId);
     });
   }
-
   async setReadReceipt(input: {
     sessionId: string;
     readReceiptCursorId?: string;
   }) {
     return await this.database.access((connection) => {
-      // oxlint-disable-next-line unicorn/no-null -- SQL uses NULL for a missing read receipt.
-      const readReceiptCursorId = input.readReceiptCursorId ?? null;
       connection
         .prepare(
           "UPDATE halo_sessions SET read_receipt_cursor_id = ? WHERE id = ?",
         )
-        .run(readReceiptCursorId, input.sessionId);
-    });
-  }
-
-  async delete(metadata: SessionMetadata) {
-    this.reserve(metadata.id);
-    using cleanup = new errore.DisposableStack();
-    cleanup.defer(() => this.reserved.delete(metadata.id));
-    const removed = await this.database.access((connection) =>
-      connection.transaction(() => {
-        readSessionRow(connection, metadata.id);
-        connection
-          .prepare("DELETE FROM halo_sessions WHERE id = ?")
-          .run(metadata.id);
-      })(),
-    );
-    if (removed instanceof Error) throw removed;
-  }
-
-  async fork(source: SessionMetadata, options: ForkOptions) {
-    const createdAt = Date.now();
-    const id = options.id === undefined ? uuidv7(createdAt) : options.id;
-    return await this.openSession(id, (connection) => {
-      readSessionRow(connection, source.id);
-      // SAFETY: The projection matches the session schema owned by workspace migrations.
-      const entryRows = connection
-        .prepare(
-          "SELECT payload FROM halo_session_entries WHERE session_id = ? ORDER BY seq",
-        )
-        .all(source.id) as { payload: string }[];
-      // SAFETY: The projection matches the session schema owned by workspace migrations.
-      const valueRows = connection
-        .prepare(
-          "SELECT namespace, key, seq, payload FROM halo_session_values WHERE session_id = ? ORDER BY seq",
-        )
-        .all(source.id) as {
-        namespace: string;
-        key: string;
-        seq: number;
-        payload: string;
-      }[];
-      const snapshot = createForkSnapshot(
-        {
-          entries: entryRows.map((row) =>
-            decodeSessionJson<Entry>(row.payload),
-          ),
-          scalarValues: valueRows.map((row): StoredValue<unknown> => ({
-            address: value(row.namespace, row.key),
-            seq: row.seq,
-            value: decodeSessionJson<unknown>(row.payload),
-          })),
-          entriesComplete: true,
-        },
-        options,
-      );
-      const metadata: SessionMetadata = {
-        id,
-        createdAt,
-        storageVersion: 1,
-        parentSessionId: source.id,
-      };
-      connection
-        .prepare(
-          "INSERT INTO halo_sessions (id, metadata, next_seq, stats) VALUES (?, ?, ?, ?)",
-        )
-        .run(
-          id,
-          JSON.stringify(metadata),
-          snapshot.nextSeq,
-          JSON.stringify(emptySessionStats()),
-        );
-      const writes: CommittedWrite[] = [
-        ...[...snapshot.entries.values()].map((entry): CommittedWrite => ({
-          kind: "entry",
-          ...entry,
-        })),
-        ...snapshot.scalarValues.map((stored): CommittedWrite => ({
-          kind: "value",
-          op: "set",
-          namespace: stored.address.namespace,
-          key: stored.address.key,
-          seq: stored.seq,
-          value: stored.value,
-        })),
-      ];
-      const stats = applySessionWrites(
-        connection,
-        id,
-        writes,
-        emptySessionStats(),
-      );
-      connection
-        .prepare("UPDATE halo_sessions SET stats = ? WHERE id = ?")
-        .run(JSON.stringify(stats), id);
-      return metadata;
+        .run(input.readReceiptCursorId ?? null, input.sessionId);
     });
   }
 
   async close() {
+    if (this.closed) return;
     this.closed = true;
-    const results = await Promise.all(
-      [...this.sessions].map(
-        async (session) =>
-          await session
+    const closed = await Promise.all(
+      [...this.storages].map(
+        async (storage) =>
+          await storage
             .close(BACKGROUND_CONTEXT)
             .catch(
               (cause) =>
-                new SessionBackendError({ detail: "Close session", cause }),
+                new SessionBackendError({ detail: "Close storage", cause }),
             ),
       ),
     );
-    return results.find((result) => result instanceof Error);
+    return closed.find((item) => item instanceof Error);
   }
 
-  private async openSession(
-    id: string,
-    read: (connection: Database) => SessionMetadata,
-  ) {
-    this.reserve(id);
-    using cleanup = new errore.DisposableStack();
-    cleanup.defer(() => this.reserved.delete(id));
-    const metadata = await this.database.access((connection) =>
-      connection.transaction(() => read(connection))(),
+  private async openReserved(
+    metadata: SessionMetadata,
+  ): Promise<SessionHandle> {
+    const opened = await TursoStorage.open({
+      database: this.database,
+      sessionId: metadata.id,
+    }).catch(
+      (cause) => new SessionBackendError({ detail: "Open storage", cause }),
     );
-    if (metadata instanceof Error) throw metadata;
-    const session = new StorageBackedSession(
+    if (opened instanceof Error) {
+      this.reserved.delete(metadata.id);
+      throw opened;
+    }
+    const storage = opened;
+    storage.setOnClose(() => {
+      this.reserved.delete(metadata.id);
+      this.storages.delete(storage);
+    });
+    this.storages.add(storage);
+    return {
       metadata,
-      new TursoStorage(this.database, id),
-      {
-        onClose: () => {
-          this.reserved.delete(id);
-          this.sessions.delete(session);
-        },
-      },
-    );
-    this.sessions.add(session);
-    cleanup.move();
-    return session;
+      storage,
+      fatalCommitErrors: storage.fatalCommitErrors,
+      read: async () => await storage.read(),
+      close: async () => await storage.close(BACKGROUND_CONTEXT),
+    };
   }
-
-  private reserve(id: string) {
+  private reserve(sessionId: string) {
     this.assertOpen();
-    if (this.reserved.has(id))
+    if (this.reserved.has(sessionId))
       throw new SessionBackendError({
-        detail: `Session is already open: ${id}`,
+        detail: `Session is already open: ${sessionId}`,
       });
-    this.reserved.add(id);
+    this.reserved.add(sessionId);
   }
-
   private assertOpen() {
     if (this.closed)
       throw new SessionBackendError({ detail: "Repository is closed" });
   }
 }
 
-function decodeSessionProductFields(
+function decodeProductFields(
   row: SessionProductFieldsRow,
 ): SessionProductFields {
-  const fields: SessionProductFields = {
-    markedDone: row.marked_done === 1,
-  };
+  const fields: SessionProductFields = { markedDone: row.marked_done === 1 };
   if (row.read_receipt_cursor_id !== null)
     fields.readReceiptCursorId = row.read_receipt_cursor_id;
   return fields;
