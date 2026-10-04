@@ -33,6 +33,7 @@ export interface ThreadRepoApi {
   open(metadata: ThreadMetadata): Promise<ThreadHandle>;
   read(threadId: string): Promise<ThreadData>;
   list(): Promise<readonly ThreadMetadata[]>;
+  listPendingThreadIds(): Promise<readonly string[] | DatabaseError>;
   close(): Promise<void | Error>;
   listProductFields(): Promise<
     ReadonlyMap<string, ThreadProductFields> | DatabaseError

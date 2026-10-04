@@ -92,6 +92,12 @@ type ThreadEvent =
   | HaloConnectionEvent;
 
 export class Thread {
+  private readonly lifecycleStream = new Stream<{ type: "idle" }>();
+  readonly lifecycle: ReadonlyStream<{ type: "idle" }> = this.lifecycleStream;
+  private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  private idleDelayElapsed = false;
+  private leases = 0;
+  private activity = 0;
   private readonly eventStream = new Stream<ThreadEvent>();
   readonly events: ReadonlyStream<ThreadEvent> = this.eventStream;
   readonly snapshot: ReadonlyProjectedStream<SessionSnapshot>;
@@ -147,6 +153,7 @@ export class Thread {
         this.updates.append({ type: "event", event: update });
       if (JSON.stringify(summary) !== JSON.stringify(this.readSummary()))
         this.summaryChanges.append();
+      this.scheduleIdle();
     };
     // Installed while the bootstrap commit still owns the mutation line.
     this.detach = harness.subscribeCommits((publication) =>
@@ -266,6 +273,62 @@ export class Thread {
 
   resume() {
     this.harness.resume();
+    this.scheduleIdle();
+  }
+
+  retain(): Disposable {
+    this.leases++;
+    this.scheduleIdle();
+    return {
+      [Symbol.dispose]: () => {
+        this.leases--;
+        this.scheduleIdle();
+      },
+    };
+  }
+
+  async canUnload() {
+    const hasOperationsOrSubscribers = this.leases > 0;
+    if (
+      !this.idleDelayElapsed ||
+      this.closed.signal.aborted ||
+      hasOperationsOrSubscribers
+    )
+      return false;
+    const activity = this.activity;
+    const inspection = await this.harness
+      .inspect(BACKGROUND_CONTEXT)
+      .catch(
+        (cause) =>
+          new SessionStorageError({ sessionId: this.sessionId, cause }),
+      );
+    if (inspection instanceof Error) return inspection;
+    const noActivityOccurredDuringInspection = this.activity === activity;
+    return (
+      !this.closed.signal.aborted &&
+      noActivityOccurredDuringInspection &&
+      inspection.tasks.length === 0 &&
+      inspection.submissions.length === 0
+    );
+  }
+
+  private scheduleIdle() {
+    this.activity++;
+    this.idleDelayElapsed = false;
+    clearTimeout(this.idleTimer);
+    if (this.closed.signal.aborted || this.leases > 0) return;
+    this.idleTimer = setTimeout(() => {
+      this.idleDelayElapsed = true;
+      // oxlint-disable-next-line typescript/no-floating-promises -- Timer work reports inspection errors; Pi owns inspection through close.
+      this.canUnload().then((idle) => {
+        if (idle instanceof Error) {
+          console.warn(idle);
+          return;
+        }
+        if (idle) this.lifecycleStream.append({ type: "idle" });
+      });
+    }, 5 * 60_000);
+    this.idleTimer.unref();
   }
 
   onSummaryChange(listener: () => Promise<void>) {
@@ -480,6 +543,7 @@ export class Thread {
 
   async close() {
     this.closed.abort();
+    clearTimeout(this.idleTimer);
     const closed = await this.harness
       .close(BACKGROUND_CONTEXT)
       .catch(

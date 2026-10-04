@@ -87,6 +87,20 @@ export class TursoThreadRepo implements ThreadRepoApi {
     });
   }
 
+  async listPendingThreadIds() {
+    return await this.database.access((connection) =>
+      (
+        connection
+          .prepare(`
+        SELECT thread_id FROM tasks WHERE status IN ('pending', 'running', 'waiting', 'completing')
+        UNION
+        SELECT thread_id FROM submissions WHERE status IN ('queued', 'placed')
+      `)
+          .all() as { thread_id: string }[]
+      ).map((row) => row.thread_id),
+    );
+  }
+
   async listProductFields() {
     return await this.database.access(
       (connection) =>

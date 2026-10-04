@@ -1,6 +1,6 @@
 # Pi Durable threads: implementation and remaining plan
 
-This is the living plan for Halo's thread runtime. **Phase 1 landed in PR #358. Phase 2 is committed locally, not pushed. Phase 3 is implemented and verified locally, not committed.** Phases 4–6 remain planned. Pseudocode describes ownership and ordering, not exact Pi method signatures.
+This is the living plan for Halo's thread runtime. **Phase 1 landed in PR #358. Phases 2 and 3 are committed locally, not pushed. Phase 4 is implemented and verified locally, not committed.** Phases 5–6 remain planned. Pseudocode describes ownership and ordering, not exact Pi method signatures.
 
 ## System flow
 
@@ -336,7 +336,7 @@ Before this phase, search could read saved conversations directly, but the sideb
 
 **Proposed**
 
-Read saved history and sidebar summaries from storage without starting an agent. Use the same projection for saved and live threads so titles, unread state, and results agree in both views. This is now implemented locally; startup still opens all threads until phase 4.
+Read saved history and sidebar summaries from storage without starting an agent. Use the same projection for saved and live threads so titles, unread state, and results agree in both views. This phase is committed locally. It left startup unchanged; phase 4 makes recovery selective.
 
 ```mermaid
 flowchart TD
@@ -403,28 +403,29 @@ diff --git a/packages/workspace-server/src/sessions/ThreadManager.ts b/packages/
    async events(
 ```
 
-## Phase 4 — Thread-requested unloading and selective recovery: planned
+## ✅ Phase 4 — Thread-requested unloading and selective recovery: implemented locally
 
 **Today**
 
-Startup opens every saved thread, and loaded threads stay in memory until explicitly closed or the server stops. Archiving changes visibility but does not release the runtime.
+Before this phase, startup opened every saved thread, and loaded threads stayed in memory until explicitly closed or the server stopped. Archiving changed visibility but did not release the runtime.
 
 **Proposed**
 
-Let an idle thread ask the manager to unload it through a lifecycle stream. The manager checks that it is still idle, closes it safely, and opens it again when needed; startup only resumes threads with unfinished work.
+Let a thread emit `idle` after five minutes without activity or event subscribers. The manager checks that it is still idle, closes it safely, and opens it again when needed; startup only resumes threads with unfinished work. This is implemented and verified locally, not committed.
 
 ```mermaid
 sequenceDiagram
     participant Thread
     participant Manager as ThreadManager
-    Thread->>Thread: idle timer expires
-    Thread-->>Manager: lifecycle Stream: unloadRequested
+    Thread->>Thread: five minutes without activity or subscribers
+    Thread->>Thread: Harness.inspect — no unfinished work
+    Thread-->>Manager: lifecycle Stream: idle
     Manager->>Manager: serialize with acquisition
-    Manager->>Thread: tryBeginUnload()
+    Manager->>Thread: canUnload()
     alt work or a subscriber arrived
         Thread-->>Manager: false — keep loaded
     else still eligible
-        Thread-->>Manager: true — mark closing
+        Thread-->>Manager: true — acquisition waits on manager queue
         Manager->>Thread: close()
         Thread-->>Manager: resources released
         Manager->>Manager: remove this instance
@@ -435,24 +436,28 @@ sequenceDiagram
  WorkspaceServer.start
 -└── open every saved thread → resume
 +├── recover interrupted routines
-+└── find threads with pending work → open → resume
++└── listPendingThreadIds → open → resume [[phase4-recovery:new:108-116]]
  idle thread
-+└── lifecycle Stream → unloadRequested
++└── lifecycle Stream → idle
 +    └── manager rechecks eligibility → close → remove
 ```
 
 ```ts
 thread.canUnload():
-  return !hasPendingWork && inFlightOperations == 0 && externalSubscribers == 0
+  if !fiveMinutesElapsed || hasOperationsOrSubscribers: return false
+  work = await harness.inspect()
+  return noActivityOccurredDuringInspection &&
+    work.tasks.length == 0 && work.submissions.length == 0
 
 thread.onIdleTimeout():
-  if canUnload(): lifecycle.append({ type: "unloadRequested" })
+  if await canUnload(): lifecycle.append({ type: "idle" })
 
-manager.onUnloadRequested(threadId, thread):
+manager.onIdle(threadId, thread):
   lifecycleQueue(threadId).run(async () => {
     if loaded.get(threadId) !== thread: return
-    if !thread.tryBeginUnload(): return
-    await thread.close()
+    if !await thread.canUnload(): return
+    result = await thread.close()
+    if result is Error: retain owner and reject new acquisitions
     loaded.delete(threadId)
   })
 
@@ -462,13 +467,46 @@ manager.prompt(input):
 
 manager.start():
   await recoverInterruptedRoutines()
-  for threadId in storage.findThreadsWithPendingWork():
+  for threadId in storage.listPendingThreadIds():
     (await open(threadId)).resume()
 ```
 
-Keep model calls and tool execution outside lifecycle queues. A thread closing unsuccessfully must not admit a replacement storage owner until resource release is known. Idle timeout length is a tunable implementation choice, not a new product setting.
+Model calls and tool execution stay outside lifecycle queues. A thread closing unsuccessfully retains ownership and rejects new acquisitions, rather than allowing a replacement over storage that may still be open. The five-minute delay is internal policy, not a new product setting. Every operation, commit, and final subscriber disconnect resets the countdown; a queued `idle` event cannot bypass a fresh countdown.
 
-The event is a request, not proof that unloading is still safe. Pending work, active operations, and external subscribers prevent unloading; archive makes an idle thread eligible without aborting it. Ignore requests from an old instance after replacement. Verification must exercise new work arriving during close, simultaneous opens, reconnect, and shutdown—not just the idle timer.
+The event is a request, not proof that unloading is still safe. Pending work, active operations, and external subscribers prevent unloading. Archived and unarchived threads use the same policy; archiving never aborts work. Internal summary subscriptions do not pin runtimes. The manager ignores events from replaced instances.
+
+Pi's `Harness.inspect()` reads unfinished tasks and unsettled submissions on its serialized mutation line without scheduling work. Startup selects all task states `pending`, `running`, `waiting`, and `completing`, plus submission states `queued` and `placed`. This includes background tasks and passive writes, not just user prompts. No migration is needed.
+
+Focused coverage verifies idle unloading, retention during model work and event subscriptions, a fresh countdown after disconnect, concurrent reopening, restart recovery, and all persisted pending-work states. The test accelerates only the five-minute idle timer; transport timers remain real. Affected checks pass (52 tasks), the full workspace-server suite passes (122 tests), and targeted Electron checks pass (5 tests). The live app restored its saved conversation after reload and received the exact requested reply from the real cloud model, with Connected status and no app-control errors.
+
+```source-diff:phase4-recovery:packages/workspace-server/src/sessions/ThreadManager.ts
+diff --git a/packages/workspace-server/src/sessions/ThreadManager.ts b/packages/workspace-server/src/sessions/ThreadManager.ts
+--- a/packages/workspace-server/src/sessions/ThreadManager.ts
++++ b/packages/workspace-server/src/sessions/ThreadManager.ts
+@@ -103,16 +105,15 @@ export class ThreadManager {
+   }
+ 
+   async start() {
+-    const metadata = await this.repo
+-      .list()
+-      .catch((cause) => new ListAgentSessionsError({ cause }));
+-    if (metadata instanceof Error) return metadata;
+-    for (const item of metadata) {
+-      const session = await this.openSession(item.id);
++    const pending = await this.repo.listPendingThreadIds();
++    if (pending instanceof Error) return pending;
++    for (const sessionId of pending) {
++      const session = await this.openSession(sessionId);
+       if (session instanceof Error) return session;
+-      session.resume();
+     }
+     this.started = true;
++    // Includes threads opened paused by routine recovery.
++    for (const session of this.sessions.values()) session.resume();
+   }
+ 
+   async *watchSummaries(
+```
 
 ## Phase 5 — One authorized tool operation path: planned
 
@@ -563,4 +601,4 @@ Stable request IDs prevent retries from creating duplicate children or messages.
 
 ## Delivery boundaries
 
-PR #358 landed phase 1. Phase 2 is committed locally, not pushed. Phase 3 is implemented locally and remains uncommitted. A ✅ marks implementation completion, not deployment or a fully green test suite; the verification limitations above still apply. For completed phases, **Today** describes the starting point before that phase and **Proposed** describes the implemented change. Phases 4–6 remain planned and should be delivered separately. No phase requires a new compatibility layer.
+PR #358 landed phase 1. Phases 2 and 3 are committed locally, not pushed. Phase 4 is implemented locally and remains uncommitted. A ✅ marks implementation completion, not deployment or a fully green test suite; the verification limitations above still apply. For completed phases, **Today** describes the starting point before that phase and **Proposed** describes the implemented change. Phases 5–6 remain planned and should be delivered separately. No phase requires a new compatibility layer.

@@ -20,7 +20,7 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { IdTokenClient } from "google-auth-library";
 import { ControlPlaneTraceUploader } from "@get-halo/workspace-server";
-import { assert, expect } from "vitest";
+import { assert, expect, vi } from "vitest";
 import { contentText } from "@earendil-works/pi-ai";
 import { m } from "@get-halo/shared/testing";
 import { messageText } from "@get-halo/workspace-server/testing";
@@ -662,6 +662,88 @@ serverTest(
     await expect(server.rpc.thread.close(session)).rejects.toThrow(
       "is not open",
     );
+    controller.abort();
+    await server.stop();
+    await server.start();
+    expect(await server.rpc.thread.snapshot(session)).toEqual(live);
+    expect(await server.rpc.thread.list()).toEqual([
+      { ...read, markedDone: true },
+    ]);
+    await expect(server.rpc.thread.close(session)).rejects.toThrow(
+      "is not open",
+    );
+  },
+);
+
+serverTest(
+  "unloads idle threads but retains active work and event subscribers",
+  async ({ server, llm }) => {
+    const schedule = globalThis.setTimeout;
+    // Accelerate only the five-minute idle clock, leaving network timers real.
+    using clock = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) =>
+        schedule(callback, delay === 300_000 ? 1_000 : delay, ...args),
+      );
+    const idle = await server.rpc.thread.new();
+    const watched = await server.rpc.thread.new();
+    const busy = await server.rpc.thread.new();
+    const controller = new AbortController();
+    using cleanup = new errore.DisposableStack();
+    cleanup.defer(() => controller.abort());
+    const events = await server.rpc.thread.events(watched, {
+      signal: controller.signal,
+    });
+    expect((await events.next()).value).toMatchObject({ type: "snapshot" });
+    const accepted = await server.rpc.thread.prompt({
+      ...busy,
+      text: "Keep working while idle threads unload",
+    });
+    await llm.waitForRequest();
+    await server.rpc.thread.markDone(idle);
+
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await expect(server.rpc.thread.close(idle)).rejects.toThrow("is not open");
+    expect(
+      (await server.rpc.thread.list()).find(
+        (item) => item.sessionId === busy.sessionId,
+      ),
+    ).toMatchObject({ isRunning: true });
+    await llm.respond(m.assistant("Work survived idle collection."));
+    expect(
+      await server.rpc.thread.wait({ ...busy, ...accepted }),
+    ).toMatchObject({ status: "completed" });
+
+    const reopened = await server.rpc.thread.events(idle, {
+      signal: controller.signal,
+    });
+    expect((await reopened.next()).value).toMatchObject({ type: "snapshot" });
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    // It stayed loaded while subscribed, and disconnect starts a fresh full delay.
+    await server.rpc.thread.close(watched);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await expect(server.rpc.thread.close(idle)).rejects.toThrow("is not open");
+    await expect(server.rpc.thread.close(busy)).rejects.toThrow("is not open");
+
+    // Concurrent acquisitions after unload share one storage owner and one admission.
+    const input = {
+      ...busy,
+      text: "Continue after unloading",
+      clientMessageId: "after-idle",
+    };
+    const [first, retry] = await Promise.all([
+      server.rpc.thread.prompt(input),
+      server.rpc.thread.prompt(input),
+    ]);
+    expect(retry).toEqual(first);
+    await llm.respond(m.assistant("Continued after unloading."));
+    await server.rpc.thread.wait({ ...busy, ...first });
+    expect(assistantReplies(await server.rpc.thread.snapshot(busy))).toEqual([
+      "Work survived idle collection.",
+      "Continued after unloading.",
+    ]);
+    expect(clock).toHaveBeenCalledWith(expect.any(Function), 300_000);
   },
 );
 

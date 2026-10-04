@@ -70,6 +70,9 @@ export class ThreadManager {
   private readonly summaries = new Map<string, SessionSummary>();
   private readonly summaryChanges = new Stream<SessionSummariesUpdate>();
   private readonly summarySubscriptions = new Map<string, () => void>();
+  private readonly lifecycleSubscriptions = new Map<string, () => void>();
+  private readonly lifecycleQueues = new Map<string, SerialQueue>();
+  private readonly closeFailures = new Map<string, Error>();
   private readonly productFieldsBySession = new Map<
     string,
     ThreadProductFields
@@ -77,7 +80,6 @@ export class ThreadManager {
   private readonly pending = new Set<Promise<unknown>>();
   private readonly sessions = new Map<string, Thread>();
   private readonly stored = new Map<string, Promise<ThreadHandle | Error>>();
-  private readonly opening = new Map<string, Promise<Error | Thread>>();
   private readonly repo: ThreadRepoApi;
   private readonly environment: ThreadOptions["environment"];
   private readonly llmApi: ThreadOptions["llmApi"];
@@ -103,16 +105,15 @@ export class ThreadManager {
   }
 
   async start() {
-    const metadata = await this.repo
-      .list()
-      .catch((cause) => new ListAgentSessionsError({ cause }));
-    if (metadata instanceof Error) return metadata;
-    for (const item of metadata) {
-      const session = await this.openSession(item.id);
+    const pending = await this.repo.listPendingThreadIds();
+    if (pending instanceof Error) return pending;
+    for (const sessionId of pending) {
+      const session = await this.openSession(sessionId);
       if (session instanceof Error) return session;
-      session.resume();
     }
     this.started = true;
+    // Includes threads opened paused by routine recovery.
+    for (const session of this.sessions.values()) session.resume();
   }
 
   async *watchSummaries(
@@ -173,9 +174,19 @@ export class ThreadManager {
     operation: (thread: Thread) => Promise<T> | T,
   ) {
     return await this.track(async () => {
-      const thread = await this.openSession(sessionId);
+      const acquired = await this.acquire(sessionId);
+      if (acquired instanceof Error) return acquired;
+      using cleanup = new errore.DisposableStack();
+      cleanup.use(acquired.lease);
+      return await operation(acquired.thread);
+    });
+  }
+
+  private async acquire(sessionId: string) {
+    return await this.lifecycleQueue(sessionId).run(async () => {
+      const thread = await this.openSessionUnqueued(sessionId);
       if (thread instanceof Error) return thread;
-      return await operation(thread);
+      return { thread, lease: thread.retain() };
     });
   }
 
@@ -210,14 +221,20 @@ export class ThreadManager {
     });
   }
 
-  async events(
+  async *events(
     sessionId: string,
     options: {
       signal?: AbortSignal;
       readConnections: () => HaloConnectionState[];
     },
   ) {
-    return await this.withThread(sessionId, (thread) => thread.watch(options));
+    const acquired = await this.track(
+      async () => await this.acquire(sessionId),
+    );
+    if (acquired instanceof Error) throw acquired;
+    using cleanup = new errore.DisposableStack();
+    cleanup.use(acquired.lease);
+    yield* acquired.thread.watch(options);
   }
 
   async abort(sessionId: string) {
@@ -255,7 +272,12 @@ export class ThreadManager {
   }
 
   async close(sessionId: string) {
-    return await this.track(async () => await this.closeSession(sessionId));
+    return await this.track(
+      async () =>
+        await this.lifecycleQueue(sessionId).run(
+          async () => await this.closeSession(sessionId),
+        ),
+    );
   }
 
   async markRead(input: { sessionId: string; observedResultId: string }) {
@@ -436,43 +458,61 @@ export class ThreadManager {
   }
 
   private async openSession(sessionId: string) {
+    return await this.lifecycleQueue(sessionId).run(
+      async () => await this.openSessionUnqueued(sessionId),
+    );
+  }
+
+  private lifecycleQueue(sessionId: string) {
+    let queue = this.lifecycleQueues.get(sessionId);
+    if (queue === undefined) {
+      queue = new SerialQueue();
+      this.lifecycleQueues.set(sessionId, queue);
+    }
+    return queue;
+  }
+
+  private async openSessionUnqueued(sessionId: string) {
+    const failed = this.closeFailures.get(sessionId);
+    if (failed !== undefined) return failed;
     const live = this.sessions.get(sessionId);
     if (live !== undefined) return live;
-    const pending = this.opening.get(sessionId);
-    if (pending !== undefined) return await pending;
-
-    const opening = this.openAndRegister(sessionId);
-    this.opening.set(sessionId, opening);
-    const session = await opening;
-    this.opening.delete(sessionId);
-    return session;
+    return await this.openAndRegister(sessionId);
   }
 
   private async closeSession(sessionId: string) {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return new SessionNotOpenError({ sessionId });
-    this.summarySubscriptions.get(sessionId)?.();
-    this.summarySubscriptions.delete(sessionId);
     const published = await this.publishSummary(sessionId);
     if (published instanceof Error) return published;
+    this.summarySubscriptions.get(sessionId)?.();
+    this.summarySubscriptions.delete(sessionId);
     const closed = await session.close();
+    if (closed instanceof Error) {
+      // Keep ownership until resource release is known; never admit a replacement.
+      this.closeFailures.set(sessionId, closed);
+      return closed;
+    }
     this.sessions.delete(sessionId);
+    this.closeFailures.delete(sessionId);
+    this.lifecycleSubscriptions.get(sessionId)?.();
+    this.lifecycleSubscriptions.delete(sessionId);
     await this.summaryQueue.run(() => {
       const summary = this.summaries.get(sessionId);
       if (summary !== undefined) this.publish({ ...summary, isRunning: false });
     });
-    this.summarySubscriptions.get(sessionId)?.();
-    this.summarySubscriptions.delete(sessionId);
     this.stored.delete(sessionId);
-    if (closed instanceof Error) return closed;
   }
 
   async shutdown() {
     this.closing = true;
     this.closed.abort();
+    await Promise.all(this.pending);
     for (const unsubscribe of this.summarySubscriptions.values()) unsubscribe();
     this.summarySubscriptions.clear();
-    await Promise.all(this.pending);
+    for (const unsubscribe of this.lifecycleSubscriptions.values())
+      unsubscribe();
+    this.lifecycleSubscriptions.clear();
 
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
@@ -481,6 +521,8 @@ export class ThreadManager {
     );
     const sessionError = closed.find((result) => result instanceof Error);
     this.stored.clear();
+    this.lifecycleQueues.clear();
+    this.closeFailures.clear();
     this.productFieldsBySession.clear();
     if (sessionError instanceof Error) return sessionError;
   }
@@ -511,11 +553,17 @@ export class ThreadManager {
     if (published instanceof Error) {
       this.summarySubscriptions.get(sessionId)?.();
       this.summarySubscriptions.delete(sessionId);
+      this.lifecycleSubscriptions.get(sessionId)?.();
+      this.lifecycleSubscriptions.delete(sessionId);
+      const closed = await session.close();
+      if (closed instanceof Error) {
+        this.closeFailures.set(sessionId, closed);
+        console.warn(closed);
+        return published;
+      }
       this.sessions.delete(sessionId);
       this.stored.delete(sessionId);
       this.summaries.delete(sessionId);
-      const closed = await session.close();
-      if (closed instanceof Error) console.warn(closed);
       return published;
     }
     if (this.started) session.resume();
@@ -548,6 +596,25 @@ export class ThreadManager {
 
   private register(session: Thread) {
     this.sessions.set(session.sessionId, session);
+    this.lifecycleSubscriptions.set(
+      session.sessionId,
+      session.lifecycle.subscribe(() => {
+        if (this.closing) return;
+        // oxlint-disable-next-line typescript/no-floating-promises -- Tracked through shutdown; returned lifecycle errors are logged below.
+        this.track(
+          async () =>
+            await this.lifecycleQueue(session.sessionId).run(async () => {
+              if (this.sessions.get(session.sessionId) !== session) return;
+              const idle = await session.canUnload();
+              if (idle instanceof Error) return idle;
+              if (!idle) return;
+              return await this.closeSession(session.sessionId);
+            }),
+        ).then((result) => {
+          if (result instanceof Error) console.warn(result);
+        });
+      }),
+    );
     this.summarySubscriptions.set(
       session.sessionId,
       session.onSummaryChange(async () => {
