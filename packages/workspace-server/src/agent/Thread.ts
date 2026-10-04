@@ -493,27 +493,11 @@ export class Thread {
   }
 
   readSummary(): Omit<SessionSummary, "markedDone" | "readReceiptCursorId"> {
-    const snapshot = this.snapshot.latestValue;
-    const latest = snapshot.entries.at(-1);
-    const timestamp =
-      latest?.type === "message" ? latest.message.timestamp : latest?.timestamp;
-    return {
-      sessionId: this.sessionId,
-      agent: "pi",
+    return this.projection.summary({
+      metadata: this.stored.metadata,
       cwd: this.workspaceRoot,
-      title: this.projection.title(snapshot).trim() || undefined,
-      isRunning: snapshot.activeRun !== undefined,
-      latestResultId:
-        snapshot.lastRun?.id ??
-        snapshot.entries.findLast(
-          (entry) =>
-            entry.type === "message" && entry.message.role === "assistant",
-        )?.id,
-      createdAt: new Date(this.stored.metadata.createdAt).toISOString(),
-      updatedAt: new Date(
-        timestamp ?? this.stored.metadata.createdAt,
-      ).toISOString(),
-    };
+      snapshot: this.snapshot.latestValue,
+    });
   }
 }
 

@@ -14,8 +14,10 @@ import {
 import {
   Thread,
   CreateAgentSessionError,
+  SessionStorageError,
   type ThreadOptions,
 } from "../agent/Thread.js";
+import { SessionProjection } from "../agent/SessionProjection.js";
 import type {
   ThreadProductFields,
   ThreadRepoApi,
@@ -199,9 +201,13 @@ export class ThreadManager {
   }
 
   async snapshot(sessionId: string, connections: HaloConnectionState[]) {
-    return await this.withThread(sessionId, (thread) =>
-      thread.readSnapshot(connections),
-    );
+    return await this.track(async () => {
+      const thread = this.sessions.get(sessionId);
+      if (thread !== undefined) return thread.readSnapshot(connections);
+      const projection = await this.readStoredProjection(sessionId);
+      if (projection instanceof Error) return projection;
+      return { ...projection.snapshot(), connections };
+    });
   }
 
   async events(
@@ -363,21 +369,21 @@ export class ThreadManager {
       const fields = productFields.get(item.id);
       if (fields === undefined)
         return new SessionNotFoundError({ sessionId: item.id });
-      const cached = this.summaries.get(item.id);
-      if (cached !== undefined) {
-        const current = applyProductFields({
-          summary: cached,
-          fields,
-        });
-        this.summaries.set(item.id, current);
-        summaries.push(current);
-        continue;
-      }
       const session = this.sessions.get(item.id);
-      if (session === undefined)
-        return new SessionNotOpenError({ sessionId: item.id });
-      const summary = await session.readSummary();
-      if (summary instanceof Error) return summary;
+      let summary = session?.readSummary();
+      if (summary === undefined) {
+        const projection = await this.readStoredProjection(item.id);
+        if (projection instanceof Error) return projection;
+        summary = {
+          ...projection.summary({
+            metadata: item,
+            cwd: this.layout.root,
+            snapshot: projection.snapshot(),
+          }),
+          // Saved pending work is not executing while its runtime is closed.
+          isRunning: false,
+        };
+      }
       const current = applyProductFields({
         summary,
         fields,
@@ -399,6 +405,14 @@ export class ThreadManager {
       summaries.find((summary) => summary.sessionId === sessionId) ??
       new SessionNotFoundError({ sessionId })
     );
+  }
+
+  private async readStoredProjection(sessionId: string) {
+    const data = await this.repo
+      .read(sessionId)
+      .catch((cause) => new SessionStorageError({ sessionId, cause }));
+    if (data instanceof Error) return data;
+    return new SessionProjection(data);
   }
 
   private async getProductFieldsUnqueued(sessionId: string) {

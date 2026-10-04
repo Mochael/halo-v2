@@ -555,7 +555,7 @@ serverTest(
 );
 
 serverTest(
-  "resumes pending work when a closed session is reopened without restarting the server",
+  "reads closed pending work without resuming it until a live stream is opened",
   async ({ server, llm }) => {
     const session = await server.rpc.thread.new();
     const accepted = await server.rpc.thread.prompt({
@@ -567,7 +567,37 @@ serverTest(
     await llm.waitForRequest();
     await server.rpc.thread.close(session);
     await interrupted;
-    await server.rpc.thread.snapshot(session);
+    const saved = await server.rpc.thread.snapshot(session);
+    expect(sessionMessages(saved)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: "Continue after reopening",
+        }),
+      ]),
+    );
+    expect(await server.rpc.thread.list()).toEqual([
+      expect.objectContaining({ ...session, isRunning: false }),
+    ]);
+    expect(
+      (await server.rpc.workspace.search({ query: "Continue after reopening" }))
+        .hits,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "session", ...session }),
+      ]),
+    );
+    // A second close fails only if these reads left the runtime closed.
+    await expect(server.rpc.thread.close(session)).rejects.toThrow(
+      "is not open",
+    );
+    const controller = new AbortController();
+    using cleanup = new errore.DisposableStack();
+    cleanup.defer(() => controller.abort());
+    const events = await server.rpc.thread.events(session, {
+      signal: controller.signal,
+    });
+    expect((await events.next()).value).toMatchObject({ type: "snapshot" });
     await llm.respond(m.assistant("Resumed after reopening."));
     await expect
       .poll(async () =>
@@ -577,6 +607,61 @@ serverTest(
     expect(
       (await server.rpc.thread.snapshot(session)).activeRun,
     ).toBeUndefined();
+  },
+);
+
+serverTest(
+  "keeps saved history and observable summary status consistent without loading a thread",
+  async ({ server, llm }) => {
+    const session = await server.rpc.thread.new();
+    const done = server.promptAndWait({
+      ...session,
+      text: "Remember sapphire robin",
+    });
+    await llm.respond(m.assistant("Sapphire robin remembered."));
+    await done;
+    const live = await server.rpc.thread.snapshot(session);
+    const summaries = await server.rpc.thread.list();
+    const summary = summaries[0]!;
+    assert(summary.latestResultId !== undefined);
+    expect(summary).toMatchObject({
+      title: "Remember sapphire robin",
+      isRunning: false,
+    });
+    await server.rpc.thread.close(session);
+
+    expect(await server.rpc.thread.snapshot(session)).toEqual(live);
+    expect(await server.rpc.thread.list()).toEqual(summaries);
+    const controller = new AbortController();
+    using cleanup = new errore.DisposableStack();
+    cleanup.defer(() => controller.abort());
+    const updates = await server.rpc.thread.watchSummaries(undefined, {
+      signal: controller.signal,
+    });
+    expect((await updates.next()).value).toEqual({
+      type: "snapshot",
+      sessions: summaries,
+    });
+    await server.rpc.thread.markRead({
+      ...session,
+      observedResultId: summary.latestResultId,
+    });
+    const read = { ...summary, readReceiptCursorId: summary.latestResultId };
+    expect((await updates.next()).value).toEqual({
+      type: "updated",
+      session: read,
+    });
+    await server.rpc.thread.markDone(session);
+    expect((await updates.next()).value).toEqual({
+      type: "updated",
+      session: { ...read, markedDone: true },
+    });
+    expect(await server.rpc.thread.list()).toEqual([
+      { ...read, markedDone: true },
+    ]);
+    await expect(server.rpc.thread.close(session)).rejects.toThrow(
+      "is not open",
+    );
   },
 );
 

@@ -1,6 +1,6 @@
 # Pi Durable threads: implementation and remaining plan
 
-This is the living plan for Halo's thread runtime. **Phase 1 landed in PR #358. Phase 2 is implemented locally, not yet committed or shipped.** Phases 3–6 remain planned. Pseudocode describes ownership and ordering, not exact Pi method signatures.
+This is the living plan for Halo's thread runtime. **Phase 1 landed in PR #358. Phase 2 is committed locally, not pushed. Phase 3 is implemented and verified locally, not committed.** Phases 4–6 remain planned. Pseudocode describes ownership and ordering, not exact Pi method signatures.
 
 ## System flow
 
@@ -190,7 +190,7 @@ After phase 1, routers and routines could keep references to loaded sessions. Ea
 
 **Proposed**
 
-Put loaded conversations behind `ThreadManager` and name the public operations `thread.*`. Give each thread one shared snapshot with `latestValue`, and acknowledge a prompt as soon as it is saved; callers that need the final result wait separately. This phase is implemented locally, but is not committed or shipped.
+Put loaded conversations behind `ThreadManager` and name the public operations `thread.*`. Give each thread one shared snapshot with `latestValue`, and acknowledge a prompt as soon as it is saved; callers that need the final result wait separately. This phase is committed locally, but is not pushed or shipped.
 
 The existing owners are renamed, not duplicated. Routers and routines use manager operations instead of retaining runtime objects. The namespace is `thread.*`, with no `sessions.*` alias. Protocol 24 is the only supported version. Existing transport DTO names and the `sessionId` field remain; these are not compatibility endpoints.
 
@@ -328,15 +328,15 @@ diff --git a/packages/client/src/contract.ts b/packages/client/src/contract.ts
          type<{
 ```
 
-## Phase 3 — Read idle conversations without loading them: planned
+## ✅ Phase 3 — Read idle conversations without loading them: implemented locally
 
 **Today**
 
-Search can read saved conversations directly, but the sidebar list still depends on loaded threads. Reading a conversation snapshot also opens its runtime, even when the caller only wants history.
+Before this phase, search could read saved conversations directly, but the sidebar list depended on loaded threads or previously cached summaries. Reading a conversation snapshot also opened its runtime, even when the caller only wanted history.
 
 **Proposed**
 
-Read saved history and sidebar summaries from storage without starting an agent. Use the same projection for saved and live threads so titles, unread state, and results agree in both views.
+Read saved history and sidebar summaries from storage without starting an agent. Use the same projection for saved and live threads so titles, unread state, and results agree in both views. This is now implemented locally; startup still opens all threads until phase 4.
 
 ```mermaid
 flowchart TD
@@ -350,25 +350,58 @@ flowchart TD
 ```
 
 ```callstack
- list / saved history
--└── loaded session → readSummary / readSnapshot
-+└── session repository → persisted projection
- live conversation
- └── manager → loaded thread → committed projection
+ thread.snapshot
+-└── withThread → open runtime → readSnapshot
++├── already loaded → Thread.readSnapshot
++└── closed → repository.read → SessionProjection.snapshot [[phase3-history:new:203-212]]
+ thread.list / watchSummaries
+-└── cached summary or loaded runtime required
++├── loaded → Thread.readSummary → SessionProjection.summary
++└── closed → repository.read → SessionProjection.summary
 ```
 
 ```ts
 list():
-  return storage.listSummaries() // no Harness.open and no scheduling
+  for metadata in repository.list():
+    if loaded.has(metadata.id): use loadedThread.readSummary()
+    else: use project(repository.read(metadata.id)).summary(isRunning = false)
+    merge archive and read-receipt fields
+  return summaries ordered by updatedAt
 
 history(threadId):
-  return project(await storage.read(threadId))
+  if loaded.has(threadId): return loadedThread.readSnapshot()
+  return project(await repository.read(threadId)).snapshot()
 
 onLoadedThreadCommit(threadId, revision):
   publishSummary(projectSummary(revision))
 ```
 
-Summary updates remain observable without retaining a UI subscription on every thread. The important test is that listing, searching, or reading history cannot dispatch model or tool work. This prepares the read side for unloading in phase 4.
+Summary updates remain observable without retaining a UI subscription on every thread. Closed threads report `isRunning: false` even if saved work awaits resumption. Saved snapshots retain committed partial messages and tool state. Opening `thread.events`, prompting, or explicitly waiting still acquires the runtime; a plain snapshot no longer resumes it.
+
+Focused tests confirm that snapshot/list/search leave a pending thread closed, opening its event stream resumes it, and history plus read/archive updates agree before and after close. Affected checks pass (52 tasks), the full workspace-server suite passes (121 tests), and targeted Electron coverage passes (5 tests: search, saved messages, partial responses, unread state, and archiving). Reloading the live development app also restored its saved conversation and reconnected successfully.
+
+```source-diff:phase3-history:packages/workspace-server/src/sessions/ThreadManager.ts
+diff --git a/packages/workspace-server/src/sessions/ThreadManager.ts b/packages/workspace-server/src/sessions/ThreadManager.ts
+--- a/packages/workspace-server/src/sessions/ThreadManager.ts
++++ b/packages/workspace-server/src/sessions/ThreadManager.ts
+@@ -199,9 +201,13 @@ export class ThreadManager {
+   }
+ 
+   async snapshot(sessionId: string, connections: HaloConnectionState[]) {
+-    return await this.withThread(sessionId, (thread) =>
+-      thread.readSnapshot(connections),
+-    );
++    return await this.track(async () => {
++      const thread = this.sessions.get(sessionId);
++      if (thread !== undefined) return thread.readSnapshot(connections);
++      const projection = await this.readStoredProjection(sessionId);
++      if (projection instanceof Error) return projection;
++      return { ...projection.snapshot(), connections };
++    });
+   }
+ 
+   async events(
+```
 
 ## Phase 4 — Thread-requested unloading and selective recovery: planned
 
@@ -530,4 +563,4 @@ Stable request IDs prevent retries from creating duplicate children or messages.
 
 ## Delivery boundaries
 
-PR #358 landed phase 1. Phase 2 is implemented locally and remains uncommitted and unshipped. A ✅ marks implementation completion, not deployment or a fully green test suite; the verification limitations above still apply. For completed phases, **Today** describes the starting point before that phase and **Proposed** describes the implemented change. Phases 3–6 remain planned and should be delivered separately. No phase requires a new compatibility layer.
+PR #358 landed phase 1. Phase 2 is committed locally, not pushed. Phase 3 is implemented locally and remains uncommitted. A ✅ marks implementation completion, not deployment or a fully green test suite; the verification limitations above still apply. For completed phases, **Today** describes the starting point before that phase and **Proposed** describes the implemented change. Phases 4–6 remain planned and should be delivered separately. No phase requires a new compatibility layer.

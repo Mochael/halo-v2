@@ -10,8 +10,9 @@ import {
   chatPromptTitle,
   type HaloMessage,
   type SessionSnapshot,
+  type SessionSummary,
 } from "@get-halo/client";
-import type { ThreadData } from "../storage/ThreadRepoApi.js";
+import type { ThreadData, ThreadMetadata } from "../storage/ThreadRepoApi.js";
 import { sessionEntry, sessionSnapshot } from "./sessionEvents.js";
 
 export type MessagePresentation =
@@ -117,6 +118,32 @@ export class SessionProjection {
       lastRun: this.lastRun,
       connections: [],
     });
+  }
+
+  summary(input: {
+    metadata: ThreadMetadata;
+    cwd: string;
+    snapshot: SessionSnapshot;
+  }): Omit<SessionSummary, "markedDone" | "readReceiptCursorId"> {
+    const { metadata, cwd, snapshot } = input;
+    const latest = snapshot.entries.at(-1);
+    const timestamp =
+      latest?.type === "message" ? latest.message.timestamp : latest?.timestamp;
+    return {
+      sessionId: metadata.id,
+      agent: "pi",
+      cwd,
+      title: this.title(snapshot).trim() || undefined,
+      isRunning: snapshot.activeRun !== undefined,
+      latestResultId:
+        snapshot.lastRun?.id ??
+        snapshot.entries.findLast(
+          (entry) =>
+            entry.type === "message" && entry.message.role === "assistant",
+        )?.id,
+      createdAt: new Date(metadata.createdAt).toISOString(),
+      updatedAt: new Date(timestamp ?? metadata.createdAt).toISOString(),
+    };
   }
 
   title(snapshot: SessionSnapshot) {
