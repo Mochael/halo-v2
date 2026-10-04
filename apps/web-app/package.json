@@ -6,6 +6,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite build --watch",
+    "preview:bundled": "vite build --mode bundled-development --outDir ../../tmp/web-app-bundled && vite preview --outDir ../../tmp/web-app-bundled --host 0.0.0.0 --port ${PORT:-4173}",
     "og:generate": "node scripts/generate-og.mjs",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

@@ -1,7 +1,7 @@
 import events from "node:events";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
-import { expect, type Locator } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { m } from "@get-halo/shared/testing";
 import { haloProtocolVersion } from "@get-halo/client";
 import { ORPCError } from "@orpc/client";
@@ -587,9 +587,13 @@ e2eTest(
     const folderName = page.getByRole("textbox", { name: "New folder name" });
     await folderName.fill("Notes");
     await folderName.press("Enter");
-    await page
-      .getByRole("button", { name: "Actions for Notes", exact: true })
-      .click();
+    const notesActions = page.getByRole("button", {
+      name: "Actions for Notes",
+      exact: true,
+      includeHidden: true,
+    });
+    await expect(notesActions).toBeHidden();
+    await openFileActions(page, "Notes");
     await page
       .getByRole("menuitem", { name: "New file…", exact: true })
       .click();
@@ -601,9 +605,7 @@ e2eTest(
       .getByLabel("Notes/Today.md", { exact: true });
     await editor.fill("My latest edit");
 
-    await page
-      .getByRole("button", { name: "Actions for Today.md", exact: true })
-      .click();
+    await openFileActions(page, "Today.md");
     await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
     await page.getByRole("textbox", { name: "Name" }).fill("Plan.md");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
@@ -611,9 +613,7 @@ e2eTest(
       page.getByRole("main", { name: "Notes/Plan.md", exact: true }),
     ).toContainText("My latest edit");
 
-    await page
-      .getByRole("button", { name: "Actions for Plan.md", exact: true })
-      .click();
+    await openFileActions(page, "Plan.md");
     await page.getByRole("menuitem", { name: "Move to…", exact: true }).click();
     await page.getByRole("button", { name: /Move to$/ }).click();
     await page.getByRole("option", { name: "Workspace", exact: true }).click();
@@ -680,6 +680,8 @@ e2eTest(
       name: "Actions for Archive",
       exact: true,
     });
+    await target.hover();
+    await expect(menu).toBeVisible();
     await menu.dispatchEvent("dragover", { dataTransfer: transfer });
     await expect(target).toHaveAttribute("data-drop-target", "true");
     await root
@@ -690,7 +692,12 @@ e2eTest(
     await source.dispatchEvent("dragend", { dataTransfer: transfer });
     await expect(page.locator('[data-drop-target="true"]')).toHaveCount(0);
     await transfer.dispose();
-    await source.dragTo(menu);
+    await source.hover();
+    await page.mouse.down();
+    await target.hover();
+    await expect(menu).toBeVisible();
+    await menu.hover();
+    await page.mouse.up();
     await expect(
       page.getByRole("main", { name: "Archive/Notes/Today.md", exact: true }),
     ).toContainText("Edited before dragging");
@@ -736,9 +743,7 @@ e2eTest(
     await fs.unlink(file);
     await fs.mkdir(file);
     await editor.fill("Keep this unsaved edit");
-    await page
-      .getByRole("button", { name: "Actions for notes.md", exact: true })
-      .click();
+    await openFileActions(page, "notes.md");
     await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
     await page.getByRole("textbox", { name: "Name" }).fill("renamed.md");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
@@ -781,15 +786,11 @@ e2eTest(
       .getByRole("main", { name: "Notes/Today.md" })
       .getByLabel("Notes/Today.md", { exact: true });
     await editor.fill("Latest edit");
-    await page
-      .getByRole("button", { name: "Actions for Notes", exact: true })
-      .click();
+    await openFileActions(page, "Notes");
     await page.getByRole("menuitem", { name: "Delete…", exact: true }).click();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(editor).toBeVisible();
-    await page
-      .getByRole("button", { name: "Actions for Notes", exact: true })
-      .click();
+    await openFileActions(page, "Notes");
     await page.getByRole("menuitem", { name: "Delete…", exact: true }).click();
     await page.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(page.getByRole("main", { name: "New session" })).toBeVisible();
@@ -3438,3 +3439,14 @@ e2eTest(
       .toContain("Plain click target. Edited");
   },
 );
+
+async function openFileActions(page: Page, name: string) {
+  const button = page.getByRole("button", {
+    name: `Actions for ${name}`,
+    exact: true,
+    includeHidden: true,
+  });
+  await page.getByRole("row").filter({ has: button }).hover();
+  await expect(button).toBeVisible();
+  await button.click();
+}
