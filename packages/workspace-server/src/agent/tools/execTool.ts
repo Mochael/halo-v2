@@ -25,6 +25,7 @@ export function createExecTool(input: {
   runtime: ToolRuntime;
   runtimeDescription: string;
   modelId: string;
+  threadId: string;
 }): ToolRegistration<typeof execParameters> {
   return defineTool({
     name: "exec",
@@ -41,6 +42,7 @@ export function createExecTool(input: {
         signal: context.abortSignal,
         modelId: input.modelId,
         parentToolCallId: api.callId,
+        threadId: input.threadId,
         onToolEvent: (event) => {
           const update = progressQueue
             .run(async () => {

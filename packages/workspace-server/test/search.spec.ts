@@ -51,7 +51,7 @@ serverTest(
         path: "database.query",
         input: { sql: "SELECT * FROM missing_table" },
       }),
-    ).rejects.toThrow("Tool runtime failed during tool invocation");
+    ).rejects.toThrow("Database query failed");
     await server.rpc.testApi.seedSession({
       title: "After failed query",
       messages: [],
@@ -62,7 +62,7 @@ serverTest(
         path: "database.query",
         input: { sql: "DELETE FROM halo_threads" },
       }),
-    ).rejects.toThrow("Tool runtime failed during tool invocation");
+    ).rejects.toThrow("Only one read-only SELECT query is allowed");
     await expect(
       server.rpc.testApi.invokeTool({
         path: "database.query",
@@ -70,13 +70,13 @@ serverTest(
           sql: "WITH doomed AS (SELECT id FROM halo_threads) DELETE FROM halo_threads",
         },
       }),
-    ).rejects.toThrow("Tool runtime failed during tool invocation");
+    ).rejects.toThrow("Database query failed");
     await expect(
       server.rpc.testApi.invokeTool({
         path: "database.query",
         input: { sql: "SELECT 1; DELETE FROM halo_threads" },
       }),
-    ).rejects.toThrow("Tool runtime failed during tool invocation");
+    ).rejects.toThrow("Only one read-only SELECT query is allowed");
     expect(
       await server.rpc.testApi.invokeTool({
         path: "database.query",

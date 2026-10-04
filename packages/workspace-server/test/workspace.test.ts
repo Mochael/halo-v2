@@ -1089,6 +1089,198 @@ serverTest("rejects files outside the public workspace", async ({ server }) => {
   ).rejects.toThrow("'../outside.txt' is not a workspace file");
 });
 
+serverTest(
+  "runs file and shell operations through direct tools and exec",
+  async ({ server, llm }) => {
+    for (const surface of ["direct", "exec"] as const) {
+      const session = await server.rpc.thread.new();
+      const file = `${surface}.txt`;
+      const prompt = server.promptAndWait({
+        ...session,
+        text: "Write, edit, patch, and read the notes",
+      });
+      const operations = [
+        {
+          name: "write",
+          path: "files.write",
+          args: { path: file, content: "alpha\nbeta\nalpha\n" },
+          expected: { path: file },
+        },
+        {
+          name: "edit",
+          path: "files.edit",
+          args: {
+            path: file,
+            oldText: "alpha",
+            newText: "delta",
+            replaceAll: true,
+          },
+          expected: { path: file, replacements: 2 },
+        },
+        {
+          name: "patch",
+          path: "files.patch",
+          args: {
+            patchText: `*** Begin Patch\n*** Update File: ${file}\n@@\n-beta\n+gamma\n*** End Patch`,
+          },
+          expected: { added: [], modified: [file], deleted: [] },
+        },
+        {
+          name: "read",
+          path: "files.read",
+          args: { path: file, offset: 2, limit: 1 },
+          expected: "gamma",
+        },
+        {
+          name: "bash",
+          path: "bash.run",
+          args: { command: `cat ${file}` },
+          expected: "delta\ngamma\ndelta\n",
+        },
+      ] as const;
+      for (const [index, operation] of operations.entries()) {
+        await llm.respond(
+          m.tool.start(surface === "direct" ? operation.name : "exec", {
+            id: `${surface}-${index}`,
+            arguments:
+              surface === "direct"
+                ? operation.args
+                : {
+                    js: `return await tools.${operation.path}(${JSON.stringify(operation.args)});`,
+                  },
+          }),
+        );
+      }
+      await llm.respond(({ messages }) => {
+        for (const [index, operation] of operations.entries()) {
+          const toolMessage = messages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.tool_call_id === `${surface}-${index}`,
+          )!;
+          const output = messageText(toolMessage);
+          if (operation.name === "read" || operation.name === "bash") {
+            if (surface === "direct")
+              expect(output).toContain(operation.expected);
+            else
+              expect(JSON.parse(output)).toMatchObject({
+                ok: true,
+                data:
+                  operation.name === "read"
+                    ? { text: expect.stringContaining(operation.expected) }
+                    : { stdout: operation.expected, code: 0 },
+              });
+          } else {
+            expect(JSON.parse(output)).toMatchObject(
+              surface === "direct"
+                ? operation.expected
+                : { ok: true, data: operation.expected },
+            );
+          }
+        }
+        return m.assistant("Operations complete.");
+      });
+      await prompt;
+      expect(await server.rpc.workspace.readFile({ path: file })).toBe(
+        "delta\ngamma\ndelta\n",
+      );
+    }
+  },
+);
+
+serverTest(
+  "denies the same capabilities through direct tools and exec",
+  async ({ createServer, llm }) => {
+    const server = createServer({ agentCapabilities: [] });
+    await server.start();
+    await server.rpc.workspace.writeFile({
+      path: "protected.txt",
+      content: "original",
+    });
+    const session = await server.rpc.thread.new();
+    const prompt = server.promptAndWait({
+      ...session,
+      text: "Attempt restricted tools",
+    });
+    const operations = [
+      {
+        name: "read",
+        path: "files.read",
+        args: { path: "protected.txt" },
+        capability: "workspace.files.read",
+      },
+      {
+        name: "viewImage",
+        path: "files.viewImage",
+        args: { path: "protected.txt" },
+        capability: "workspace.files.read",
+      },
+      {
+        name: "write",
+        path: "files.write",
+        args: { path: "protected.txt", content: "changed" },
+        capability: "workspace.files.write",
+      },
+      {
+        name: "edit",
+        path: "files.edit",
+        args: {
+          path: "protected.txt",
+          oldText: "original",
+          newText: "changed",
+        },
+        capability: "workspace.files.write",
+      },
+      {
+        name: "patch",
+        path: "files.patch",
+        args: {
+          patchText:
+            "*** Begin Patch\n*** Update File: protected.txt\n@@\n-original\n+changed\n*** End Patch",
+        },
+        capability: "workspace.files.write",
+      },
+      {
+        name: "bash",
+        path: "bash.run",
+        args: { command: "printf changed > protected.txt" },
+        capability: "workspace.shell.execute",
+      },
+    ] as const;
+    await llm.respond(
+      operations.flatMap((operation) => [
+        m.tool.start(operation.name, {
+          id: `direct-${operation.name}`,
+          arguments: operation.args,
+        }),
+        m.tool.start("exec", {
+          id: `exec-${operation.name}`,
+          arguments: {
+            js: `return await tools.${operation.path}(${JSON.stringify(operation.args)});`,
+          },
+        }),
+      ]),
+    );
+    await llm.respond(({ messages }) => {
+      for (const operation of operations)
+        for (const surface of ["direct", "exec"]) {
+          const toolMessage = messages.find(
+            (message) =>
+              message.role === "tool" &&
+              message.tool_call_id === `${surface}-${operation.name}`,
+          )!;
+          expect(messageText(toolMessage)).toContain(operation.capability);
+          expect(messageText(toolMessage)).toContain("not granted");
+        }
+      return m.assistant("No restricted operations were performed.");
+    });
+    await prompt;
+    expect(await server.rpc.workspace.readFile({ path: "protected.txt" })).toBe(
+      "original",
+    );
+  },
+);
+
 serverTest("reads files prepared by the tool fixture", async ({ server }) => {
   await server.rpc.testApi.invokeTool({
     path: "files.write",

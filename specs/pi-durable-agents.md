@@ -1,6 +1,6 @@
 # Pi Durable threads: implementation and remaining plan
 
-This is the living plan for Halo's thread runtime. **Phase 1 landed in PR #358. Phases 2 and 3 are committed locally, not pushed. Phase 4 is implemented and verified locally, not committed.** Phases 5–6 remain planned. Pseudocode describes ownership and ordering, not exact Pi method signatures.
+This is the living plan for Halo's thread runtime. **Phase 1 landed in PR #358. Phases 2–4 are committed locally, not pushed. Phase 5 is implemented and verified locally, not committed.** Phase 6 remains planned. Pseudocode describes ownership and ordering, not exact Pi method signatures.
 
 ## System flow
 
@@ -411,7 +411,7 @@ Before this phase, startup opened every saved thread, and loaded threads stayed 
 
 **Proposed**
 
-Let a thread emit `idle` after five minutes without activity or event subscribers. The manager checks that it is still idle, closes it safely, and opens it again when needed; startup only resumes threads with unfinished work. This is implemented and verified locally, not committed.
+Let a thread emit `idle` after five minutes without activity or event subscribers. The manager checks that it is still idle, closes it safely, and opens it again when needed; startup only resumes threads with unfinished work. This phase is committed locally, not pushed.
 
 ```mermaid
 sequenceDiagram
@@ -508,46 +508,105 @@ diff --git a/packages/workspace-server/src/sessions/ThreadManager.ts b/packages/
    async *watchSummaries(
 ```
 
-## Phase 5 — One authorized tool operation path: planned
+## ✅ Phase 5 — One authorized tool operation path: implemented locally
 
 **Today**
 
-Direct file tools and tools called through `exec` use separate wrappers around shared implementations. Both enforce permissions, but there are still two places to wire execution behavior.
+Before this phase, direct tools and tools called through `exec` used separate wrappers around shared implementations. Both checked permissions, but direct tools repeated the required capabilities and invoked file and shell functions themselves.
 
 **Proposed**
 
-Send both forms through the same `ToolRuntime` operation. Keep the direct tools as convenient shortcuts, while `exec` adds JavaScript composition around those same operations.
+Send both forms through `ToolRuntime.invoke`, using the registered operation's capability requirements and implementation. Direct tools keep their existing model-facing schemas and formatting; `exec` adds JavaScript composition around the same operations. This is implemented and verified locally, not committed.
 
 ```mermaid
 flowchart LR
-    Direct[Direct read / write / edit / patch] --> Runtime[ToolRuntime.invoke]
+    Direct[Direct file / image / shell tools] --> Runtime[ToolRuntime.invoke]
     Exec[exec JavaScript] --> Executor[Executor tool call]
     Executor --> Runtime
     Runtime --> Auth[Check caller permissions]
-    Auth --> Operation[Shared file or integration operation]
-    Credentials[ToolRuntime-owned credentials] --> Operation
-    Operation --> Result[Same results, errors, and progress]
+    Auth --> Validate[Registered tool validates arguments]
+    Validate --> Operation[Shared Halo operation]
+    Operation --> Result[Surface-specific formatting]
+    Executor --> Provider[External integration plugin]
+    Provider --> Credentials[Runtime-owned credential provider]
+    Credentials --> API[External API]
 ```
 
 ```callstack
- direct read/write/edit/patch and exec
+ direct read/write/edit/patch/viewImage/bash and exec
 -├── direct wrapper → authority + shared file implementation
 -└── Executor wrapper → authority + shared file implementation
 +├── direct wrapper → ToolRuntime.invoke
-+└── Executor invocation → ToolRuntime.invoke
++└── Executor invocation → ToolRuntime.invoke [[phase5-invoke:new:316-338]]
 ```
 
 ```ts
-directRead(args, context):
-  return toolRuntime.invoke("files.read", args, context)
+directRead(args, piContext):
+  result = await toolRuntime.invoke("files.read", args, trustedThreadContext)
+  if result is Error: throw result // Pi's tool boundary
+  return { content: text(result.value.text), details: result.value }
 
 exec.tools.files.read(args):
-  return toolRuntime.invoke("files.read", args, trustedExecutionContext)
+  result = await toolRuntime.invoke("files.read", args, trustedExecutionContext)
+  if result is Error: return { ok: false, error: { code, message } }
+  return { ok: true, data: result.value }
+
+toolRuntime.invoke(operation, args, caller):
+  definition = registeredTools.lookup(operation)
+  denied = await authority.authorize(definition.requiredCapabilities)
+  if denied: return denied
+  return definition.execute(args, { workspaceRoot, userId, runtime, ...caller })
 ```
 
-Context carries agent identity, effective permissions, cancellation, and tool-call correlation. Credentials remain owned by ToolRuntime. Executor supplies JavaScript composition, not a separate authorization policy.
+The runtime is workspace-owned; each thread registers a Pi-facing adapter list against it. `HaloToolContext` is trusted host metadata, not model arguments: workspace, user, model, thread identity, root Pi tool-call correlation, cancellation, and the runtime. Executor carries the invocation metadata through `AsyncLocalStorage`. Nested progress retains its own generated invocation IDs. Capability grants remain workspace-wide and can be restricted by the host; per-child restrictions belong to phase 6.
 
-Preserve tool schemas, output formatting, errors, progress, and file-access boundaries. Keep the existing direct tool inventory until a separate product decision removes a tool. Verify the same successful and denied operations through both surfaces, moving one operation family at a time.
+The registered files plugin now includes `viewImage`, so direct image viewing also follows this path. Direct Bash still keeps 8k leading and 32k trailing characters in a thread-specific output file; Executor Bash keeps 4k + 16k under `integrations`. The host-only `bashOutput` context option preserves that existing distinction. It is shell-specific policy in the shared context, not a Pi requirement or a model-controlled argument.
+
+External integrations still use Executor's integration plugins and credential provider, rather than Halo's built-in-operation lookup. No OAuth or integration policy changed. Returned Halo domain errors now use Executor's supported `ToolResult.fail`, fixing a discovered adapter bug that turned capability denials into generic internal errors. Unexpected thrown failures still remain defects.
+
+Affected checks pass (52 tasks), and seven focused tool tests pass, covering successful and denied calls on both surfaces, output limits, shell timeout, and nested progress. The full server suite passed 123 of 124 tests; its sole failure expected the old generic database error. After updating those assertions to the actual domain errors, all five database/search tests passed, including rejection of writes and unchanged row counts. The full suite was not repeated after that assertion-only update. In the live Electron app, a real model used direct `write` and Executor `files.read`; the expanded activity showed both operations, the reply contained `saffron tern`, and the saved file matched.
+
+```source-diff:phase5-invoke:packages/workspace-server/src/agent/runtime/ToolRuntime.ts
+diff --git a/packages/workspace-server/src/agent/runtime/ToolRuntime.ts b/packages/workspace-server/src/agent/runtime/ToolRuntime.ts
+--- a/packages/workspace-server/src/agent/runtime/ToolRuntime.ts
++++ b/packages/workspace-server/src/agent/runtime/ToolRuntime.ts
+@@ -321,24 +316,23 @@ function toExecutorTool(input: {
+     inputSchema: toExecutorSchema(input.haloTool.inputSchema),
+     execute: (args) =>
+       Effect.promise(async () => {
+-        const authorization = await input.authority.authorize({
+-          pluginId: input.pluginId,
+-          toolName: input.haloTool.name,
+-          requiredCapabilities: input.haloTool.requiredCapabilities,
+-        });
+-        if (authorization instanceof Error) return authorization;
+         // SAFETY: ToolRuntime runs every Executor invocation inside executionContext.
+         const context =
+           input.executionContext.getStore() as ToolExecutionContext;
+-        return await input.haloTool.execute(args, {
+-          ...input.context,
+-          ...context,
++        return await context.runtime.invoke({
++          pluginId: input.pluginId,
++          toolName: input.haloTool.name,
++          args,
++          signal: context.signal,
++          modelId: context.modelId,
++          threadId: context.threadId,
++          toolCallId: context.parentToolCallId,
+         });
+       }).pipe(
+-        Effect.flatMap((result) =>
++        Effect.map((result) =>
+           result instanceof Error
+-            ? Effect.fail(result)
+-            : Effect.succeed(result.value),
++            ? ToolResult.fail({ code: result.name, message: result.message })
++            : result.value,
+         ),
+       ),
+   });
+```
 
 ## Phase 6 — Agents can start and message agents: planned
 
@@ -601,4 +660,4 @@ Stable request IDs prevent retries from creating duplicate children or messages.
 
 ## Delivery boundaries
 
-PR #358 landed phase 1. Phases 2 and 3 are committed locally, not pushed. Phase 4 is implemented locally and remains uncommitted. A ✅ marks implementation completion, not deployment or a fully green test suite; the verification limitations above still apply. For completed phases, **Today** describes the starting point before that phase and **Proposed** describes the implemented change. Phases 5–6 remain planned and should be delivered separately. No phase requires a new compatibility layer.
+PR #358 landed phase 1. Phases 2–4 are committed locally, not pushed. Phase 5 is implemented locally and remains uncommitted. A ✅ marks implementation completion, not deployment or a fully green test suite; the verification limitations above still apply. For completed phases, **Today** describes the starting point before that phase and **Proposed** describes the implemented change. Phase 6 remains planned. No phase requires a new compatibility layer.

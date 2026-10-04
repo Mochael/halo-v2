@@ -65,6 +65,8 @@ export type WorkspaceServerConfig = {
 export type WorkspaceServerHost = {
   // Inference client the host constructs and keeps for this process.
   llmApi: LLMApi;
+  // Host-granted tool capabilities; omitted uses the standard workspace grants.
+  agentCapabilities?: readonly string[];
   // Optional upload transport the host owns; the server submits completed traces through it.
   traceUploader?: TraceUploader;
   // Logger the host owns; the server writes through it and does not close the sinks.
@@ -250,13 +252,15 @@ export class WorkspaceServer {
           workspaceBashPlugin,
           parallelSearchPlugin,
         ],
-        authority: new StaticAgentAuthority([
-          "workspace.hotkeys",
-          "workspace.files.read",
-          "workspace.files.write",
-          "workspace.shell.execute",
-          "network.web.search",
-        ]),
+        authority: new StaticAgentAuthority(
+          host.agentCapabilities ?? [
+            "workspace.hotkeys",
+            "workspace.files.read",
+            "workspace.files.write",
+            "workspace.shell.execute",
+            "network.web.search",
+          ],
+        ),
       }),
     ]);
     if (!(toolRuntime instanceof Error))

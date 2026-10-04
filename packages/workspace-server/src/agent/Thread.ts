@@ -41,7 +41,7 @@ import { prepareChatAttachments } from "./chatAttachments.js";
 import type { WorkspaceLayout } from "../workspace/WorkspaceService.js";
 import type { FilesystemService } from "../filesystem/FilesystemService.js";
 import type { ToolRuntime } from "./runtime/ToolRuntime.js";
-import { createAuthorizedCodingTools } from "./tools/codingTools.js";
+import { createCodingTools } from "./tools/codingTools.js";
 import { createExecTool } from "./tools/execTool.js";
 import { limitToolOutput } from "./tools/limitToolOutput.js";
 import { WorkspaceResourceLoader } from "./WorkspaceResourceLoader.js";
@@ -182,11 +182,11 @@ export class Thread {
     const reloaded = await resourceLoader.reload();
     if (reloaded instanceof Error) return reloaded;
     const tools: ToolRegistration[] = [
-      ...createAuthorizedCodingTools({
+      ...createCodingTools({
         cwd: layout.root,
-        sessionId: stored.metadata.id,
-        filesystem: options.filesystem,
-        authority: runtime,
+        threadId: stored.metadata.id,
+        modelId: llmApi.model.id,
+        runtime,
       }).map((tool: AgentTool): ToolRegistration => ({
         name: tool.name,
         description: tool.description,
@@ -207,7 +207,12 @@ export class Thread {
           };
         },
       })),
-      createExecTool({ runtime, runtimeDescription, modelId: llmApi.model.id }),
+      createExecTool({
+        runtime,
+        runtimeDescription,
+        modelId: llmApi.model.id,
+        threadId: stored.metadata.id,
+      }),
     ].map((tool) =>
       limitToolOutput(tool, {
         workspaceRoot: layout.root,
