@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { copyJson } from "@earendil-works/chord";
 import type {
-  AgentHarnessTool,
-  AgentToolResult,
-} from "@earendil-works/pi-agent-core";
+  ToolExecutionResult,
+  ToolRegistration,
+} from "@earendil-works/pi-durable";
 import { execToolCallSchema } from "@get-halo/client";
 import { Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
@@ -26,8 +27,8 @@ class SaveToolOutputError extends errore.createTaggedError({
   message: "Could not save the full tool output",
 }) {}
 
-function textContent(result: AgentToolResult<unknown>) {
-  return result.content
+function textContent(result: ToolExecutionResult) {
+  return (result.content ?? [])
     .flatMap((part) => (part.type === "text" ? [part.text] : []))
     .join("\n");
 }
@@ -65,27 +66,13 @@ async function saveOutput(input: {
 }
 
 export function limitToolOutput(
-  tool: AgentHarnessTool<object | undefined>,
+  tool: ToolRegistration,
   input: { workspaceRoot: string; sessionId: string },
-): AgentHarnessTool<object | undefined> {
+): ToolRegistration {
   return {
     ...tool,
-    async execute(
-      toolCallId,
-      params,
-      onUpdate,
-      toolContext,
-      invocation,
-      context,
-    ) {
-      const result = await tool.execute(
-        toolCallId,
-        params,
-        onUpdate,
-        toolContext,
-        invocation,
-        context,
-      );
+    async execute(args, api, context) {
+      const result = await tool.execute(args, api, context);
       if (
         tool.name === "bash" &&
         Value.Check(streamedBashDetailsSchema, result.details)
@@ -111,19 +98,30 @@ export function limitToolOutput(
         ...result,
         content: [
           { type: "text", text: preview(fullText, notice) },
-          ...result.content.filter((part) => part.type !== "text"),
+          ...(result.content ?? []).filter((part) => part.type !== "text"),
         ],
-        details:
-          tool.name === "exec" && Value.Check(execDetailsSchema, result.details)
-            ? outputFile instanceof Error
-              ? { toolCalls: result.details.toolCalls }
-              : {
-                  toolCalls: result.details.toolCalls,
-                  fullOutputPath: outputFile,
-                }
-            : outputFile instanceof Error
-              ? undefined
-              : { fullOutputPath: outputFile },
+        ...(outputFile instanceof Error
+          ? tool.name === "exec" &&
+            Value.Check(execDetailsSchema, result.details)
+            ? {
+                details: copyJson(
+                  { toolCalls: result.details.toolCalls },
+                  { omitUndefinedProperties: true },
+                ),
+              }
+            : {}
+          : {
+              details: copyJson(
+                tool.name === "exec" &&
+                  Value.Check(execDetailsSchema, result.details)
+                  ? {
+                      toolCalls: result.details.toolCalls,
+                      fullOutputPath: outputFile,
+                    }
+                  : { fullOutputPath: outputFile },
+                { omitUndefinedProperties: true },
+              ),
+            }),
       };
     },
   };

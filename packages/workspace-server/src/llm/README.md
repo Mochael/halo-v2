@@ -1,7 +1,7 @@
 # Inference dependency
 
 `WorkspaceServer.start({ config, host })` requires an `LLMApi` on `host`. Each
-session creates an in-memory Pi `ModelRuntime` backed by that shared API through
+session creates an in-memory Pi `Models` collection backed by that shared API through
 its own trace recorder. This keeps concurrent model calls associated with the
 correct conversation. Sessions do not discover providers, select a default
 model, or load model credentials.

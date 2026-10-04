@@ -1,6 +1,9 @@
 import { InvalidRoutineError, type RoutineInput } from "@get-halo/client";
+import { Logger } from "@get-halo/logger";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { AbortFailedError } from "../agent/HaloAgentSession.js";
 import { routineTest } from "./fixtures.test.js";
+import { RoutineRunner } from "./RoutineRunner.js";
 import { RoutineNotFoundError } from "./RoutineService.js";
 
 const everyTwoMinutes: RoutineInput = {
@@ -171,6 +174,64 @@ routineTest(
     expect(await after.listRuns({ routineId: saved.id })).toMatchObject([
       { id: run.id, status: "interrupted" },
     ]);
+  },
+);
+
+routineTest(
+  "recovery aborts attached routine sessions before interrupting their runs",
+  async ({ openRoutines }) => {
+    const routines = await openRoutines();
+    const saved = await routines.save(everyTwoMinutes);
+    if (saved instanceof Error) throw saved;
+    const run = await routines.beginRun({
+      routineId: saved.id,
+      trigger: "manual",
+    });
+    if (run instanceof Error || run === undefined) throw new Error("No run");
+    await routines.attachSession({ runId: run.id, sessionId: "session-1" });
+    const abortError = new AbortFailedError({
+      reason: "abort failed",
+      cause: new Error("abort failed"),
+    });
+    const failedRunner = new RoutineRunner({
+      routines,
+      sessions: {
+        open: async () => ({ abort: async () => abortError }),
+        create: vi.fn(),
+        markDone: vi.fn(),
+      },
+      filesystem: { stat: vi.fn() },
+      workspaceRoot: "/workspace",
+      logger: new Logger(),
+    });
+
+    expect(await failedRunner.recover()).toBe(abortError);
+    expect(routines.get(saved.id)).toMatchObject({
+      lastRun: { status: "running" },
+    });
+
+    const abort = vi.fn(async () => {
+      expect(routines.get(saved.id)).toMatchObject({
+        lastRun: { status: "running" },
+      });
+    });
+    const open = vi.fn(async () => ({ abort }));
+    const runner = new RoutineRunner({
+      routines,
+      sessions: { open, create: vi.fn(), markDone: vi.fn() },
+      filesystem: { stat: vi.fn() },
+      workspaceRoot: "/workspace",
+      logger: new Logger(),
+    });
+
+    const recovered = await runner.recover();
+
+    expect(recovered).toBeUndefined();
+    expect(open).toHaveBeenCalledWith("session-1");
+    expect(abort).toHaveBeenCalledOnce();
+    expect(routines.get(saved.id)).toMatchObject({
+      lastRun: { status: "interrupted" },
+    });
   },
 );
 

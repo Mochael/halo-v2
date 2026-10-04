@@ -118,7 +118,7 @@ const showConnectionCardInputSchema = Type.Object({
   }),
 });
 
-export type ExecActivityUpdate =
+type ExecActivityUpdate =
   | {
       type: "tool.started";
       invocation: {

@@ -115,7 +115,9 @@ routineTest(
     await before.stop();
 
     await vi.advanceTimersByTimeAsync(7 * 60_000);
-    const after = startScheduler(await openRoutines());
+    const afterRoutines = await openRoutines();
+    await afterRoutines.recover();
+    const after = startScheduler(afterRoutines);
     await after.start();
     await vi.advanceTimersByTimeAsync(0);
     const restarted = await openRoutines();

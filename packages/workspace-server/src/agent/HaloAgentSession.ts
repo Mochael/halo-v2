@@ -1,20 +1,20 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
+import type { Message } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { copyJson } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
-  AgentHarness,
-  type AgentLane,
-  type HarnessEvent,
-  type AgentTool,
-  type AgentMessage,
-  type AgentHarnessTool,
-  LaneBusy,
-  NoActiveOperation,
-} from "@earendil-works/pi-agent-core";
-import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
-import type { Session } from "@earendil-works/pi-agent-core/harness/session";
+  Harness,
+  createRegistry,
+  defineExtension,
+  section,
+  type Conversation,
+  type ToolRegistration,
+  type EntryDraft,
+} from "@earendil-works/pi-durable";
+import type { SessionHandle, SessionData } from "../storage/SessionRepoApi.js";
 import type { LLMApi } from "../llm/LLMApi.js";
 import { createPiModelRuntime } from "../llm/createPiModelRuntime.js";
-import { PiTrace } from "../traces/PiTrace.js";
-import type { TraceService } from "../traces/TraceService.js";
 import * as errore from "errore";
 import { Stream } from "@get-halo/shared/Stream";
 import {
@@ -23,6 +23,8 @@ import {
   type HaloConnectionEvent,
   type HaloConnectionState,
   type ChatPrompt,
+  type SessionSnapshot,
+  type SessionSummary,
   chatPromptContent,
 } from "@get-halo/client";
 import { prepareChatAttachments } from "./chatAttachments.js";
@@ -34,28 +36,29 @@ import { createExecTool } from "./tools/execTool.js";
 import { limitToolOutput } from "./tools/limitToolOutput.js";
 import { WorkspaceResourceLoader } from "./WorkspaceResourceLoader.js";
 import type { HaloEnvironment } from "./workspacePrompt.js";
-import { adaptPiEvent, sessionSnapshot } from "./sessionEvents.js";
+import { sessionEvents } from "./sessionEvents.js";
+import {
+  HaloSessionDoc,
+  SessionProjection,
+  type MessagePresentation,
+} from "./SessionProjection.js";
 
 export class EmptyPromptError extends errore.createTaggedError({
   name: "EmptyPromptError",
   message: "Enter a prompt first.",
 }) {}
-
 export class PromptFailedError extends errore.createTaggedError({
   name: "PromptFailedError",
   message: "$reason",
 }) {}
-
 export class AbortFailedError extends errore.createTaggedError({
   name: "AbortFailedError",
   message: "$reason",
 }) {}
-
 export class CreateAgentSessionError extends errore.createTaggedError({
   name: "CreateAgentSessionError",
   message: "Failed to create agent session",
 }) {}
-
 export class SessionStorageError extends errore.createTaggedError({
   name: "SessionStorageError",
   message: "Could not access storage for session '$sessionId'",
@@ -65,213 +68,234 @@ type SessionNotification = {
   customType: "halo.integration.connected";
   content: string;
 };
-
 export type HaloAgentSessionOptions = {
   environment: HaloEnvironment;
   llmApi: LLMApi;
-  traces: TraceService;
-  model: Model<Api>;
   filesystem: FilesystemService;
   layout: WorkspaceLayout;
   toolRuntime: ToolRuntime;
 };
 
 export class HaloAgentSession {
-  private readonly connectionEvents = new Stream<HaloConnectionEvent>();
+  // All consumers observe the same complete committed revision.
+  private snapshot: SessionSnapshot;
+  private readonly projection: SessionProjection;
+  private readonly updates = new Stream<SessionWatchItem>();
+  private readonly summaryChanges = new Stream<void>();
   private readonly closed = new AbortController();
+  private readonly detach: () => void;
+  private readonly detachStorage: () => void;
+  readonly sessionId: string;
+  private readonly harness: Harness;
+  private readonly conversation: Conversation;
+  private readonly stored: SessionHandle;
+  private readonly filesystem: FilesystemService;
+  private readonly workspaceRoot: string;
 
-  private constructor(
-    readonly sessionId: string,
-    private readonly harness: AgentHarness,
-    private readonly lane: AgentLane,
-    private readonly attachmentContext: {
-      filesystem: FilesystemService;
-      workspaceRoot: string;
-    },
-  ) {}
-
-  static async attach(options: HaloAgentSessionOptions, stored: Session) {
-    await using cleanup = new errore.AsyncDisposableStack();
-    cleanup.defer(async () => await stored.close(BACKGROUND_CONTEXT));
-    const layout = options.layout;
-    const runtime = options.toolRuntime;
-    const trace = new PiTrace({
-      service: options.traces,
-      sessionId: stored.metadata.id,
-      llmApi: options.llmApi,
+  private constructor(ctx: {
+    harness: Harness;
+    conversation: Conversation;
+    stored: SessionHandle;
+    data: SessionData;
+    filesystem: FilesystemService;
+    workspaceRoot: string;
+  }) {
+    const { harness, conversation, stored, data, filesystem, workspaceRoot } =
+      ctx;
+    this.harness = harness;
+    this.conversation = conversation;
+    this.stored = stored;
+    this.sessionId = stored.metadata.id;
+    this.filesystem = filesystem;
+    this.workspaceRoot = workspaceRoot;
+    this.projection = new SessionProjection(data);
+    this.snapshot = this.projection.snapshot();
+    // Installed while the bootstrap commit still owns the mutation line.
+    this.detach = harness.subscribeCommits((publication) => {
+      const previous = this.snapshot;
+      const summary = this.readSummary();
+      this.projection.apply(publication);
+      this.snapshot = this.projection.snapshot();
+      for (const event of sessionEvents(previous, this.snapshot))
+        this.updates.append({ type: "event", event });
+      if (JSON.stringify(summary) !== JSON.stringify(this.readSummary()))
+        this.summaryChanges.append();
     });
-    const modelRuntime = await createPiModelRuntime(trace.api());
-    if (modelRuntime instanceof Error) return modelRuntime;
+    this.detachStorage = stored.fatalCommitErrors.subscribe((error) => {
+      this.snapshot = {
+        ...this.snapshot,
+        activeRun: undefined,
+        fault: error.message,
+      };
+      this.updates.append({
+        type: "event",
+        event: { type: "session.failed", error: error.message },
+      });
+      this.summaryChanges.append();
+    });
+  }
+
+  static async attach(options: HaloAgentSessionOptions, stored: SessionHandle) {
+    await using cleanup = new errore.AsyncDisposableStack();
+    cleanup.defer(async () => await stored.close());
+    const { layout, toolRuntime: runtime, llmApi } = options;
     const runtimeDescription = await runtime.getAgentDescription();
     if (runtimeDescription instanceof Error) return runtimeDescription;
-
     const resourceLoader = new WorkspaceResourceLoader({
       environment: options.environment,
       workspaceRoot: layout.root,
     });
     const reloaded = await resourceLoader.reload();
     if (reloaded instanceof Error) return reloaded;
-    const customTools: AgentHarnessTool<object | undefined>[] = [
+    const tools: ToolRegistration[] = [
       ...createAuthorizedCodingTools({
         cwd: layout.root,
         sessionId: stored.metadata.id,
         filesystem: options.filesystem,
         authority: runtime,
-      }).map((tool: AgentTool): AgentHarnessTool<object | undefined> => ({
-        ...tool,
-        execute: async (
-          id,
-          params,
-          onUpdate,
-          _toolContext,
-          _invocation,
-          context,
-        ) => await tool.execute(id, params, context.abortSignal, onUpdate),
+      }).map((tool: AgentTool): ToolRegistration => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        replay:
+          tool.name === "read" || tool.name === "viewImage" ? "safe" : "unsafe",
+        execute: async (params, api, context) => {
+          const result = await tool.execute(
+            api.callId,
+            params,
+            context.abortSignal,
+          );
+          return {
+            ...result,
+            details: copyJson(result.details, {
+              omitUndefinedProperties: true,
+            }),
+          };
+        },
       })),
-      createExecTool({
-        runtime,
-        runtimeDescription,
-        modelId: options.model.id,
-        onToolEvent: (event) => trace.integration(event),
-      }),
+      createExecTool({ runtime, runtimeDescription, modelId: llmApi.model.id }),
     ].map((tool) =>
       limitToolOutput(tool, {
         workspaceRoot: layout.root,
         sessionId: stored.metadata.id,
       }),
     );
-    const created = await AgentHarness.create(
+    const registry = createRegistry();
+    registry.install(
+      defineExtension({
+        name: "halo",
+        tools,
+        sections: [section("halo", () => resourceLoader.getSystemPrompt())],
+      }),
+    );
+    const harness = await Harness.open(
+      stored.storage,
       {
-        session: stored,
-        models: modelRuntime,
-        model: options.model,
-        tools: customTools,
-        systemPrompt: () => resourceLoader.getSystemPrompt(),
-        resources: resourceLoader.getResources(),
+        models: createPiModelRuntime(llmApi),
+        registry,
+        settings: { toolExecution: "parallel" },
+        onReport: (error) => console.warn("Pi Durable", error),
       },
       BACKGROUND_CONTEXT,
     ).catch((cause) => new CreateAgentSessionError({ cause }));
-    if (created instanceof Error) return created;
-    cleanup.defer(async () => await created.harness.close(BACKGROUND_CONTEXT));
-    // Attaching Pi restores unfinished operations without running them; Halo cancels them before accepting new work.
-    for (const operation of created.open) {
-      const recovering = await created.harness.lane(
-        operation.lane,
+    if (harness instanceof Error) return harness;
+    cleanup.defer(async () => await harness.close(BACKGROUND_CONTEXT));
+    const conversation = await harness
+      .root(BACKGROUND_CONTEXT, {
+        init: async (tx, conversationId) => {
+          await tx.doc(HaloSessionDoc, conversationId);
+        },
+      })
+      .catch((cause) => new CreateAgentSessionError({ cause }));
+    if (conversation instanceof Error) return conversation;
+    const configured = await conversation
+      .configure(
+        {
+          model: { provider: llmApi.model.provider, modelId: llmApi.model.id },
+          cwd: layout.root,
+        },
         BACKGROUND_CONTEXT,
-      );
-      const aborted = await recovering.abort(BACKGROUND_CONTEXT);
-      if (!aborted.ok)
-        return new CreateAgentSessionError({ cause: aborted.error });
-    }
-    const lane = await created.harness.lane(
-      "main",
-      // oxlint-disable-next-line unicorn/no-null -- Pi uses null for an empty branch tip.
-      { createAt: null },
-      BACKGROUND_CONTEXT,
-    );
-    const session = new HaloAgentSession(
-      stored.metadata.id,
-      created.harness,
-      lane,
-      { filesystem: options.filesystem, workspaceRoot: layout.root },
-    );
-    trace.attach(created.harness);
+      )
+      .catch((cause) => new CreateAgentSessionError({ cause }));
+    if (configured instanceof Error) return configured;
+    const session = await harness
+      .commit(
+        async () =>
+          new HaloAgentSession({
+            harness,
+            conversation,
+            stored,
+            data: await stored.read(),
+            filesystem: options.filesystem,
+            workspaceRoot: layout.root,
+          }),
+        BACKGROUND_CONTEXT,
+      )
+      .catch((cause) => new CreateAgentSessionError({ cause }));
+    if (session instanceof Error) return session;
     cleanup.move();
     return session;
   }
 
-  onSummaryChange(listener: (event: HarnessEvent) => Promise<void>) {
-    const types = [
-      "run_start",
-      "run_end",
-      "fault",
-      "entry_added",
-      "value_update",
-    ] as const;
-    const subscriptions = types.map((type) =>
-      this.harness.events.on(type, async (event) => {
-        if (event.lane !== undefined && event.lane !== "main") return;
-        if (event.type === "value_update" && event.value !== "session_name")
-          return;
-        await listener(event);
-      }),
-    );
-    return () => {
-      for (const unsubscribe of subscriptions) unsubscribe();
-    };
+  resume() {
+    this.harness.resume();
   }
 
-  async readSnapshot(connections: HaloConnectionState[]) {
-    const watch = await this.lane
-      .watch(BACKGROUND_CONTEXT)
-      .catch(
-        (cause) =>
-          new SessionStorageError({ sessionId: this.sessionId, cause }),
-      );
-    if (watch instanceof Error) return watch;
-    watch.unsubscribe();
-    return sessionSnapshot(watch.snapshot, connections);
+  onSummaryChange(listener: () => Promise<void>) {
+    return this.summaryChanges.subscribe(() => {
+      queueMicrotask(() => {
+        // oxlint-disable-next-line typescript/no-floating-promises -- The registry tracks summary work through shutdown and reports returned errors.
+        listener();
+      });
+    });
+  }
+
+  readSnapshot(connections: HaloConnectionState[]) {
+    return { ...this.snapshot, connections };
   }
 
   async *watch(options: {
     signal?: AbortSignal;
     readConnections: () => HaloConnectionState[];
-  }): AsyncGenerator<SessionWatchItem, void, void> {
-    const signal =
-      options.signal === undefined ? this.closed.signal : options.signal;
-    const abortSignal = AbortSignal.any([signal, this.closed.signal]);
-    const stream = new Stream<SessionWatchItem>();
-    using updates = stream.consume({ abortSignal });
-    using cleanup = new errore.DisposableStack();
-    cleanup.defer(
-      this.connectionEvents.subscribe((event) =>
-        stream.append({ type: "event", event }),
-      ),
-    );
-    const watch = await this.lane.watch(BACKGROUND_CONTEXT);
-    cleanup.defer(() => watch.unsubscribe());
+  }): AsyncGenerator<SessionWatchItem> {
+    const abortSignal =
+      options.signal === undefined
+        ? this.closed.signal
+        : AbortSignal.any([options.signal, this.closed.signal]);
+    using updates = this.updates.consume({ abortSignal });
     if (abortSignal.aborted) return;
     yield {
       type: "snapshot",
-      snapshot: sessionSnapshot(watch.snapshot, options.readConnections()),
+      snapshot: this.readSnapshot(options.readConnections()),
     };
-    watch.start((event) => {
-      const adapted = adaptPiEvent(event);
-      if (adapted !== undefined)
-        stream.append({ type: "event", event: adapted });
-    });
     yield* updates;
   }
 
   publishConnectionEvent(event: HaloConnectionEvent) {
-    this.connectionEvents.append(event);
+    this.updates.append({ type: "event", event });
   }
 
   async appendMessages(messages: readonly StoredMessage[]) {
-    for (const message of messages) {
-      const appended = await this.lane
-        .appendMessage(
-          message.role === "bashExecution"
-            ? { ...message, exitCode: message.exitCode }
-            : message,
-          BACKGROUND_CONTEXT,
-        )
-        .catch(
-          (cause) =>
-            new SessionStorageError({ sessionId: this.sessionId, cause }),
-        );
-      if (appended instanceof Error) return appended;
-    }
+    return await this.conversation
+      .commit(async (tx) => {
+        for (const message of messages)
+          await tx.appendEntry(this.conversation.id, messageDraft(message));
+      }, BACKGROUND_CONTEXT)
+      .catch(
+        (cause) =>
+          new SessionStorageError({ sessionId: this.sessionId, cause }),
+      );
   }
 
   async setName(name: string) {
-    return await this.harness.setName(name, BACKGROUND_CONTEXT).catch(
-      (cause) =>
-        new SessionStorageError({
-          sessionId: this.sessionId,
-          cause,
-        }),
-    );
+    return await this.conversation
+      .commit(async (tx) => {
+        (await tx.doc(HaloSessionDoc, this.conversation.id)).name = name;
+      }, BACKGROUND_CONTEXT)
+      .catch(
+        (cause) =>
+          new SessionStorageError({ sessionId: this.sessionId, cause }),
+      );
   }
 
   async prompt(input: ChatPrompt) {
@@ -284,10 +308,11 @@ export class HaloAgentSession {
     if (files.length > 0) {
       const prepared = await prepareChatAttachments({
         files,
-        ...this.attachmentContext,
+        filesystem: this.filesystem,
+        workspaceRoot: this.workspaceRoot,
       });
       if (prepared instanceof Error) return prepared;
-      const message: Extract<StoredMessage, { role: "user" }> = {
+      return await this.send({
         role: "user",
         content: [{ type: "text", text: content }, ...prepared.content],
         displayText: text,
@@ -295,62 +320,101 @@ export class HaloAgentSession {
         references,
         clientMessageId: input.clientMessageId,
         timestamp: Date.now(),
-      };
-      return await this.send(message);
+      });
     }
-    const message: Extract<StoredMessage, { role: "user" }> = {
+    return await this.send({
       role: "user",
       content,
       displayText: text,
       references,
       clientMessageId: input.clientMessageId,
       timestamp: Date.now(),
-    };
-    return await this.send(message);
+    });
   }
 
-  private async send(message: AgentMessage) {
-    const prompted = await this.lane
-      .prompt(message, BACKGROUND_CONTEXT)
+  private async send(
+    message: Extract<StoredMessage, { role: "user" | "custom" }>,
+  ) {
+    const requestId =
+      message.role === "user"
+        ? (message.clientMessageId ?? randomUUID())
+        : randomUUID();
+    const saved = await this.conversation
+      .commit(async (tx) => {
+        const state = await tx.doc(HaloSessionDoc, this.conversation.id);
+        if (message.role === "user") {
+          const { content: _content, ...presentation } = message;
+          // SAFETY: Removing undefined optional fields preserves the presentation shape and makes it valid Chord JSON.
+          state.inputs[requestId] ??= copyJson(presentation, {
+            omitUndefinedProperties: true,
+          }) as MessagePresentation;
+        } else {
+          const {
+            content: _content,
+            details: _details,
+            ...presentation
+          } = message;
+          // SAFETY: Removing undefined optional fields preserves the presentation shape and makes it valid Chord JSON.
+          state.inputs[requestId] ??= copyJson(presentation, {
+            omitUndefinedProperties: true,
+          }) as MessagePresentation;
+        }
+      }, BACKGROUND_CONTEXT)
+      .catch(
+        (cause) =>
+          new PromptFailedError({ reason: "Could not save message", cause }),
+      );
+    if (saved instanceof Error) return saved;
+    const submitted = await this.conversation
+      .submit(
+        {
+          type: "input",
+          content: message.content,
+          requestId,
+          whenBusy: "steer",
+        },
+        BACKGROUND_CONTEXT,
+      )
       .catch(
         (cause) => new PromptFailedError({ reason: "Prompt failed", cause }),
       );
-    if (prompted instanceof Error) return prompted;
-    // Pi settles a started run before returning its outcome.
-    if (prompted.ok) return prompted.value;
-    if (!(prompted.error instanceof LaneBusy))
-      return new PromptFailedError({
-        reason: prompted.error.message,
-        cause: prompted.error,
-      });
-    const queued = await this.lane
-      .steer(message, undefined, BACKGROUND_CONTEXT)
+    if (submitted instanceof Error) return submitted;
+    const status = await submitted
+      .status(BACKGROUND_CONTEXT)
       .catch(
         (cause) =>
-          new PromptFailedError({ reason: "Could not queue message", cause }),
+          new PromptFailedError({ reason: "Could not read submission", cause }),
       );
-    if (queued instanceof Error) return queued;
-    if (!queued.ok)
-      return new PromptFailedError({
-        reason: queued.error.message,
-        cause: queued.error,
-      });
+    if (status instanceof Error) return status;
+    if (status.status === "queued") return;
+    const settled = await submitted
+      .wait(BACKGROUND_CONTEXT)
+      .catch(
+        (cause) =>
+          new PromptFailedError({ reason: "Prompt interrupted", cause }),
+      );
+    if (settled instanceof Error) return settled;
+    return {
+      status:
+        settled.status === "done"
+          ? ("completed" as const)
+          : settled.reason === "aborted"
+            ? ("aborted" as const)
+            : ("failed" as const),
+      error:
+        settled.status === "unanswered"
+          ? { message: settled.reason }
+          : undefined,
+    };
   }
 
   async abort() {
-    const aborted = await this.lane
+    return await this.conversation
       .abort(BACKGROUND_CONTEXT)
       .catch(
         (cause) => new AbortFailedError({ reason: "Abort failed", cause }),
       );
-    if (aborted instanceof Error) return aborted;
-    if (!aborted.ok && !(aborted.error instanceof NoActiveOperation))
-      return new AbortFailedError({
-        reason: aborted.error.message,
-        cause: aborted.error,
-      });
   }
-
   async notify(input: SessionNotification) {
     return await this.send({
       role: "custom",
@@ -368,6 +432,64 @@ export class HaloAgentSession {
         (cause) =>
           new AbortFailedError({ reason: "Session close failed", cause }),
       );
+    this.detach();
+    this.detachStorage();
     if (closed instanceof Error) return closed;
   }
+
+  readSummary(): Omit<SessionSummary, "markedDone" | "readReceiptCursorId"> {
+    const snapshot = this.snapshot;
+    const latest = snapshot.entries.at(-1);
+    const timestamp =
+      latest?.type === "message" ? latest.message.timestamp : latest?.timestamp;
+    return {
+      sessionId: this.sessionId,
+      agent: "pi",
+      cwd: this.workspaceRoot,
+      title: this.projection.title(snapshot).trim() || undefined,
+      isRunning: snapshot.activeRun !== undefined,
+      latestResultId:
+        snapshot.lastRun?.id ??
+        snapshot.entries.findLast(
+          (entry) =>
+            entry.type === "message" && entry.message.role === "assistant",
+        )?.id,
+      createdAt: new Date(this.stored.metadata.createdAt).toISOString(),
+      updatedAt: new Date(
+        timestamp ?? this.stored.metadata.createdAt,
+      ).toISOString(),
+    };
+  }
+}
+
+function messageDraft(message: StoredMessage): EntryDraft {
+  const model: Message[] =
+    message.role === "user" || message.role === "assistant"
+      ? [message]
+      : message.role === "toolResult"
+        ? [
+            {
+              ...message,
+              details:
+                message.details === undefined
+                  ? undefined
+                  : copyJson(message.details, {
+                      omitUndefinedProperties: true,
+                    }),
+            },
+          ]
+        : message.role === "custom"
+          ? [
+              {
+                role: "user",
+                content: message.content,
+                timestamp: message.timestamp,
+              },
+            ]
+          : [];
+  return {
+    kind: "halo.message",
+    model,
+    data: copyJson({ message }, { omitUndefinedProperties: true }),
+  };
 }

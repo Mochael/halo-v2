@@ -1,15 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { StorageFixture } from "@earendil-works/pi-agent-core/harness/session/testing";
+import type { Storage } from "@earendil-works/pi-durable";
 import { test as baseTest } from "vitest";
 import { FilesystemService } from "../filesystem/FilesystemService.js";
 import { DatabaseClient } from "./DatabaseClient.js";
 import { TursoSessionRepo } from "./TursoSessionRepo.js";
-import { TursoStorage } from "./TursoStorage.js";
 
-export type PiBackendFixture = {
+type PiBackendFixture = {
   repo: TursoSessionRepo;
-  openStorage(): Promise<StorageFixture>;
+  openStorage(): Promise<Storage>;
 };
 
 export const piBackendTest = baseTest.extend<{
@@ -34,12 +33,7 @@ export const piBackendTest = baseTest.extend<{
     await use({
       repo,
       async openStorage() {
-        const session = await repo.create(undefined);
-        const storage = new TursoStorage(database, session.metadata.id);
-        return {
-          storage,
-          [Symbol.asyncDispose]: async () => await storage.close(),
-        };
+        return (await repo.create()).storage;
       },
     });
 

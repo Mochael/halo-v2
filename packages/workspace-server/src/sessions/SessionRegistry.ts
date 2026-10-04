@@ -1,18 +1,8 @@
-import { contentText } from "@earendil-works/pi-ai";
 import * as errore from "errore";
-import {
-  BACKGROUND_CONTEXT,
-  type Session,
-  type SessionMetadata,
-  type HarnessEvent,
-} from "@earendil-works/pi-agent-core";
-import { laneState } from "@earendil-works/pi-agent-core/harness/session";
 import { Stream } from "@get-halo/shared/Stream";
 import { SerialQueue } from "@get-halo/shared/SerialQueue";
 import {
-  chatPromptTitle,
   isThreadUnread,
-  type HaloMessage,
   type SessionSummary,
   type SessionSummariesUpdate,
 } from "@get-halo/client";
@@ -24,6 +14,8 @@ import {
 import type {
   SessionProductFields,
   SessionRepoApi,
+  SessionHandle,
+  SessionMetadata,
 } from "../storage/SessionRepoApi.js";
 
 export class SessionNotFoundError extends errore.createTaggedError({
@@ -62,6 +54,8 @@ type PiSessionSummary = Omit<
 
 export class SessionRegistry {
   private closing = false;
+  // Recovery opens sessions paused until interrupted routines have been aborted.
+  private started = false;
   private readonly closed = new AbortController();
   // Serializes snapshots and updates so reconnect cannot miss a transition.
   private readonly summaryQueue = new SerialQueue();
@@ -74,7 +68,7 @@ export class SessionRegistry {
   >();
   private readonly pending = new Set<Promise<unknown>>();
   private readonly sessions = new Map<string, HaloAgentSession>();
-  private readonly stored = new Map<string, Promise<Session | Error>>();
+  private readonly stored = new Map<string, Promise<SessionHandle | Error>>();
   private readonly opening = new Map<
     string,
     Promise<Error | HaloAgentSession>
@@ -82,28 +76,15 @@ export class SessionRegistry {
   private readonly repo: SessionRepoApi;
   private readonly environment: HaloAgentSessionOptions["environment"];
   private readonly llmApi: HaloAgentSessionOptions["llmApi"];
-  private readonly traces: HaloAgentSessionOptions["traces"];
-  private readonly model: HaloAgentSessionOptions["model"];
   private readonly filesystem: HaloAgentSessionOptions["filesystem"];
   private readonly layout: HaloAgentSessionOptions["layout"];
   private readonly toolRuntime: HaloAgentSessionOptions["toolRuntime"];
 
   constructor(ctx: SessionRegistryOptions) {
-    const {
-      repo,
-      environment,
-      llmApi,
-      traces,
-      model,
-      filesystem,
-      layout,
-      toolRuntime,
-    } = ctx;
+    const { repo, environment, llmApi, filesystem, layout, toolRuntime } = ctx;
     this.repo = repo;
     this.environment = environment;
     this.llmApi = llmApi;
-    this.traces = traces;
-    this.model = model;
     this.filesystem = filesystem;
     this.layout = layout;
     this.toolRuntime = toolRuntime;
@@ -114,6 +95,19 @@ export class SessionRegistry {
       async () =>
         await this.summaryQueue.run(async () => await this.listSessions()),
     );
+  }
+
+  async start() {
+    const metadata = await this.repo
+      .list()
+      .catch((cause) => new ListAgentSessionsError({ cause }));
+    if (metadata instanceof Error) return metadata;
+    for (const item of metadata) {
+      const session = await this.open(item.id);
+      if (session instanceof Error) return session;
+      session.resume();
+    }
+    this.started = true;
   }
 
   async *watchSummaries(
@@ -252,7 +246,7 @@ export class SessionRegistry {
 
   private async listSessions() {
     const metadata = await this.repo
-      .list(undefined, BACKGROUND_CONTEXT)
+      .list()
       .catch((cause) => new ListAgentSessionsError({ cause }));
     if (metadata instanceof Error) return metadata;
     const productFields = await this.repo.listProductFields();
@@ -275,18 +269,13 @@ export class SessionRegistry {
         summaries.push(current);
         continue;
       }
-      const stored = await this.openStored(item);
-      if (stored instanceof Error) return stored;
-      const summary = await readSessionSummary(stored, this.layout.root).catch(
-        (cause) => new ListAgentSessionsError({ cause }),
-      );
+      const session = this.sessions.get(item.id);
+      if (session === undefined)
+        return new SessionNotOpenError({ sessionId: item.id });
+      const summary = await session.readSummary();
       if (summary instanceof Error) return summary;
-      // Unfinished operations in storage are recovered only when a session opens.
       const current = applyProductFields({
-        summary: {
-          ...summary,
-          isRunning: this.sessions.has(item.id) && summary.isRunning,
-        },
+        summary,
         fields,
       });
       this.summaries.set(item.id, current);
@@ -320,7 +309,7 @@ export class SessionRegistry {
 
   private async createSession() {
     const stored = await this.repo
-      .create({}, BACKGROUND_CONTEXT)
+      .create({})
       .catch((cause) => new CreateAgentSessionError({ cause }));
     if (stored instanceof Error) return stored;
     this.productFieldsBySession.set(stored.metadata.id, { markedDone: false });
@@ -344,6 +333,10 @@ export class SessionRegistry {
   private async closeSession(sessionId: string) {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return new SessionNotOpenError({ sessionId });
+    this.summarySubscriptions.get(sessionId)?.();
+    this.summarySubscriptions.delete(sessionId);
+    const published = await this.publishSummary(sessionId);
+    if (published instanceof Error) return published;
     const closed = await session.close();
     this.sessions.delete(sessionId);
     await this.summaryQueue.run(() => {
@@ -385,8 +378,6 @@ export class SessionRegistry {
       {
         environment: this.environment,
         llmApi: this.llmApi,
-        traces: this.traces,
-        model: this.model,
         filesystem: this.filesystem,
         layout: this.layout,
         toolRuntime: this.toolRuntime,
@@ -409,12 +400,13 @@ export class SessionRegistry {
       if (closed instanceof Error) console.warn(closed);
       return published;
     }
+    if (this.started) session.resume();
     return session;
   }
 
   private async findStored(sessionId: string) {
     const metadata = await this.repo
-      .list(undefined, BACKGROUND_CONTEXT)
+      .list()
       .catch((cause) => new ListAgentSessionsError({ cause }));
     if (metadata instanceof Error) return metadata;
     const item = metadata.find((candidate) => candidate.id === sessionId);
@@ -426,7 +418,7 @@ export class SessionRegistry {
     const existing = this.stored.get(metadata.id);
     if (existing !== undefined) return await existing;
     const opening = this.repo
-      .open(metadata, BACKGROUND_CONTEXT)
+      .open(metadata)
       .catch(
         (cause) => new OpenAgentSessionError({ sessionId: metadata.id, cause }),
       );
@@ -440,36 +432,23 @@ export class SessionRegistry {
     this.sessions.set(session.sessionId, session);
     this.summarySubscriptions.set(
       session.sessionId,
-      session.onSummaryChange(async (event) => {
+      session.onSummaryChange(async () => {
         if (this.closing) return;
-        const published = await this.publishSummary(session.sessionId, event);
+        const published = await this.publishSummary(session.sessionId);
         if (published instanceof Error) console.warn(published);
       }),
     );
   }
 
-  private async publishSummary(sessionId: string, event?: HarnessEvent) {
+  private async publishSummary(sessionId: string) {
     return await this.track(
       async () =>
         await this.summaryQueue.run(async () => {
-          const cached = this.summaries.get(sessionId);
-          if (
-            cached !== undefined &&
-            event !== undefined &&
-            event.type !== "value_update"
-          ) {
-            this.publish(applySummaryEvent(cached, event));
-            return;
-          }
-          const stored = await this.stored.get(sessionId);
-          if (stored === undefined) return;
-          if (stored instanceof Error) return stored;
+          const session = this.sessions.get(sessionId);
+          if (session === undefined) return;
           const fields = await this.getProductFieldsUnqueued(sessionId);
           if (fields instanceof Error) return fields;
-          const summary = await readSessionSummary(
-            stored,
-            this.layout.root,
-          ).catch((cause) => new ListAgentSessionsError({ cause }));
+          const summary = await session.readSummary();
           if (summary instanceof Error) return summary;
           this.publish(
             applyProductFields({
@@ -490,43 +469,6 @@ export class SessionRegistry {
   }
 }
 
-function applySummaryEvent(
-  summary: SessionSummary,
-  event: HarnessEvent,
-): SessionSummary {
-  switch (event.type) {
-    case "run_start":
-      return { ...summary, isRunning: true };
-    case "run_end":
-      return {
-        ...summary,
-        isRunning: false,
-        latestResultId: event.runId,
-      };
-    case "fault":
-      return { ...summary, isRunning: false };
-    case "entry_added": {
-      const entry = event.entry;
-      const message = entry.type === "message" ? entry.message : undefined;
-      const title =
-        summary.title ??
-        (message?.role === "user" ? userTitle(message) : undefined);
-      const latestResultId =
-        !summary.isRunning && message?.role === "assistant"
-          ? entry.id
-          : summary.latestResultId;
-      return {
-        ...summary,
-        title: title?.trim().length === 0 ? undefined : title,
-        updatedAt: new Date(entry.timestamp).toISOString(),
-        latestResultId,
-      };
-    }
-    default:
-      return summary;
-  }
-}
-
 function applyProductFields({
   summary,
   fields,
@@ -535,48 +477,4 @@ function applyProductFields({
   fields: SessionProductFields;
 }): SessionSummary {
   return { ...summary, ...fields };
-}
-
-async function readSessionSummary(
-  session: Session,
-  cwd: string,
-): Promise<PiSessionSummary> {
-  const name = await session.getName(BACKGROUND_CONTEXT);
-  const entries = await session.findEntries(
-    { order: "asc" },
-    BACKGROUND_CONTEXT,
-  );
-  const first = entries.find(
-    (entry) => entry.type === "message" && entry.message.role === "user",
-  );
-  const firstMessage =
-    first?.type === "message" && first.message.role === "user"
-      ? userTitle(first.message)
-      : "";
-  const title = name === undefined ? firstMessage : name;
-  const latest = entries.at(-1);
-  const lane = await session.getValue(laneState("main"), BACKGROUND_CONTEXT);
-  const lastAssistant = entries.findLast(
-    (entry) => entry.type === "message" && entry.message.role === "assistant",
-  );
-  return {
-    sessionId: session.metadata.id,
-    isRunning: lane !== undefined && lane.value.currentOperationId !== null,
-    latestResultId: lane?.value.lastOperationId ?? lastAssistant?.id,
-    agent: "pi" as const,
-    cwd,
-    title: title.trim().length === 0 ? undefined : title,
-    createdAt: new Date(session.metadata.createdAt).toISOString(),
-    updatedAt: new Date(
-      latest === undefined ? session.metadata.createdAt : latest.timestamp,
-    ).toISOString(),
-  };
-}
-
-function userTitle(message: Extract<HaloMessage, { role: "user" }>) {
-  return chatPromptTitle({
-    text: message.displayText ?? contentText(message.content),
-    files: message.attachments,
-    references: message.references,
-  });
 }

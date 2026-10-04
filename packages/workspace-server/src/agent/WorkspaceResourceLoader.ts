@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import {
-  formatSkillsForSystemPrompt,
+  formatSkillsForPrompt,
+  loadSkillsFromDir,
   type Skill,
-} from "@earendil-works/pi-agent-core";
+} from "@earendil-works/pi-coding-agent";
 import * as errore from "errore";
 import {
   haloEnvironmentPrompt,
@@ -36,13 +36,7 @@ export class WorkspaceResourceLoader {
       dir: join(this.workspaceRoot, ".agents", "skills"),
       source: "workspace",
     });
-    const skills: Skill[] = [];
-    for (const skill of loaded.skills) {
-      const content = await readInstructions(skill.filePath);
-      if (content instanceof Error) return content;
-      skills.push({ ...skill, content });
-    }
-    this.skills = skills;
+    this.skills = loaded.skills;
     this.instructions = "";
     const path = join(this.workspaceRoot, "AGENTS.md");
     if (!existsSync(path)) return;
@@ -51,14 +45,11 @@ export class WorkspaceResourceLoader {
     this.instructions = `<project_context>\n<project_instructions path="${path}">\n${content}\n</project_instructions>\n</project_context>`;
   }
 
-  getResources() {
-    return { skills: this.skills };
-  }
   getSystemPrompt() {
     return [
       haloSystemPrompt({ environment: this.environment }),
       this.instructions,
-      formatSkillsForSystemPrompt(this.skills),
+      formatSkillsForPrompt(this.skills),
       haloEnvironmentPrompt({
         environment: this.environment,
         workspaceRoot: this.workspaceRoot,

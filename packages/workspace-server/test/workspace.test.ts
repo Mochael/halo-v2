@@ -11,6 +11,7 @@ import {
   sessionToolExecutions,
   type HaloClient,
   type TraceRecord,
+  type SessionEvent,
   type SessionSummary,
   type SessionSummariesUpdate,
 } from "@get-halo/client";
@@ -212,7 +213,7 @@ serverTest(
 
 serverTest(
   "uploads archives through the control plane and retries rejected requests after restart",
-  async ({ createServer, llm, http }) => {
+  async ({ createServer, http }) => {
     const token = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
     const uploader = new ControlPlaneTraceUploader({
       origin: http.url(""),
@@ -237,13 +238,18 @@ serverTest(
       traceWorkspaceId: workspaceId,
     });
     await server.start();
-    const session = await server.rpc.sessions.create();
-    const prompt = server.rpc.sessions.prompt({
-      ...session,
-      text: "Archive me",
+    const run = await server.rpc.traces.start({
+      sessionId: "upload-session",
+      agent: { id: "test" },
     });
-    await llm.respond(m.assistant("Archived answer"));
-    await prompt;
+    await server.rpc.traces.record({
+      traceId: run.traceId,
+      event: { type: "test.event", spanId: run.spanId },
+    });
+    await server.rpc.traces.finish({
+      traceId: run.traceId,
+      outcome: "completed",
+    });
     const [trace] = await readTraces(server.workspaceRoot);
     const record = trace!.records[0]!;
     expect(record.workspaceId).toBe(workspaceId);
@@ -267,12 +273,18 @@ serverTest(
       .toBe(1);
     expect(await readTraces(server.workspaceRoot, "pending")).toHaveLength(0);
 
-    const next = server.rpc.sessions.prompt({
-      ...session,
-      text: "A later request",
+    const nextRun = await server.rpc.traces.start({
+      sessionId: "upload-session",
+      agent: { id: "test" },
     });
-    await llm.respond(m.assistant("Another answer"));
-    await next;
+    await server.rpc.traces.record({
+      traceId: nextRun.traceId,
+      event: { type: "test.event", spanId: nextRun.spanId },
+    });
+    await server.rpc.traces.finish({
+      traceId: nextRun.traceId,
+      outcome: "completed",
+    });
     const [secondTrace] = await readTraces(server.workspaceRoot);
     expect(secondTrace!.name).not.toBe(trace!.name);
     const secondRecord = secondTrace!.records[0]!;
@@ -289,209 +301,52 @@ serverTest(
   },
 );
 
-serverTest(
-  "archives complete model and nested tool activity without a chat watcher",
-  async ({ server, llm }) => {
-    const session = await server.rpc.sessions.create();
-    await server.rpc.workspace.writeFile({
-      path: "notes.md",
-      content: "Trace me",
-    });
-    const prompt = server.rpc.sessions.prompt({
-      ...session,
-      text: "Read notes",
-    });
-    await llm.waitForRequest();
-    expect(await server.rpc.sessions.list()).toEqual([
-      expect.objectContaining({ ...session, isRunning: true }),
-    ]);
-    await llm.respond(
-      m.tool.start("exec", {
-        id: "read-notes",
-        arguments: {
-          js: 'return await tools.files.read({ path: "notes.md" });',
-        },
-      }),
-    );
-    await llm.respond(m.assistant("Your notes say Trace me."));
-    await prompt;
-    expect(await server.rpc.sessions.list()).toEqual([
-      expect.objectContaining({
-        ...session,
-        isRunning: false,
-        latestResultId: expect.any(String),
-      }),
-    ]);
-
-    const [trace] = await readTraces(server.workspaceRoot);
-    expect(trace).toBeDefined();
-    expect(trace!.records[0]).toMatchObject({
-      sessionId: session.sessionId,
-      sequence: 0,
-      type: "run.started",
-    });
-    expect(trace!.records.at(-1)).toMatchObject({
-      type: "run.finished",
-      data: { outcome: "completed" },
-    });
-    expect(trace!.records.map((record) => record.sequence)).toEqual(
-      trace!.records.map((_, index) => index),
-    );
-    const starts = trace!.records.filter(
-      (record) => record.type === "model.started",
-    );
-    expect(starts).toHaveLength(2);
-    expect(starts[0]).toMatchObject({
-      data: {
-        model: { id: "scripted" },
-        context: {
-          systemPrompt: expect.any(String),
-          tools: expect.arrayContaining([
-            expect.objectContaining({ name: "exec" }),
-          ]),
-          messages: expect.arrayContaining([
-            expect.objectContaining({ role: "user", content: "Read notes" }),
-          ]),
-        },
-      },
-    });
-    expect(
-      trace!.records.filter((record) => record.type === "model.payload"),
-    ).toHaveLength(2);
-    expect(
-      trace!.records.filter((record) => record.type === "model.finished"),
-    ).toHaveLength(2);
-    const tool = trace!.records.find(
-      (record) => record.type === "tool.started",
-    )!;
-    const integration = trace!.records.find(
-      (record) => record.type === "integration.started",
-    )!;
-    expect(integration.parentSpanId).toBe(tool.spanId);
-    expect(
-      trace!.records.find((record) => record.type === "integration.finished"),
-    ).toMatchObject({
-      spanId: integration.spanId,
-      data: { isError: false, result: expect.anything() },
-    });
-    expect(trace!.name).toMatch(
-      /v1\/workspaces\/[\da-f-]+\/sessions\/[\da-f-]+\/[\da-f]{32}\.jsonl\.gz$/,
-    );
-    expect(JSON.stringify(trace!.records)).not.toContain("halo-e2e");
-  },
-);
-
-serverTest(
-  "adds immutable runs to a conversation after restart and separates concurrent sessions",
-  async ({ server, llm }) => {
-    const session = await server.rpc.sessions.create();
-    const first = server.rpc.sessions.prompt({
-      ...session,
-      text: "First request",
-    });
-    await llm.respond(m.assistant("First answer"));
-    await first;
-    const [original] = await readTraces(server.workspaceRoot);
-    await server.stop();
-    await server.start();
-    const other = await server.rpc.sessions.create();
-    const second = server.rpc.sessions.prompt({
-      ...session,
-      text: "Continue later",
-    });
-    const separate = server.rpc.sessions.prompt({
-      ...other,
-      text: "Separate conversation",
-    });
-    await llm.respond(m.assistant("Answer one"));
-    await llm.respond(m.assistant("Answer two"));
-    await Promise.all([second, separate]);
-    const traces = await readTraces(server.workspaceRoot);
-    expect(traces).toHaveLength(3);
-    expect(
-      traces.find((trace) => trace.name === original!.name)?.bytes,
-    ).toEqual(original!.bytes);
-    expect(
-      new Set(traces.map((trace) => trace.records[0]!.workspaceId)).size,
-    ).toBe(1);
-    expect(
-      traces.filter(
-        (trace) => trace.records[0]!.sessionId === session.sessionId,
-      ),
-    ).toHaveLength(2);
-    for (const trace of traces) {
-      expect(new Set(trace.records.map((record) => record.traceId)).size).toBe(
-        1,
-      );
-      expect(
-        new Set(trace.records.map((record) => record.sessionId)).size,
-      ).toBe(1);
-    }
-  },
-);
-
-serverTest(
-  "archives cancelled model calls and extension-defined runs",
-  async ({ server, llm }) => {
-    const session = await server.rpc.sessions.create();
-    const prompt = server.rpc.sessions.prompt({
-      ...session,
-      text: "Keep working",
-    });
-    await llm.waitForRequest();
-    await server.rpc.sessions.abort(session);
-    await prompt;
-    const external = await server.rpc.traces.start({
-      sessionId: "extension-conversation",
-      agent: { id: "expenses", version: "build-12" },
-    });
-    await server.rpc.traces.record({
+serverTest("archives extension-defined runs", async ({ server }) => {
+  const external = await server.rpc.traces.start({
+    sessionId: "extension-conversation",
+    agent: { id: "expenses", version: "build-12" },
+  });
+  await server.rpc.traces.record({
+    traceId: external.traceId,
+    event: {
+      type: "model.started",
+      spanId: "1234567890abcdef",
+      parentSpanId: external.spanId,
+      data: { systemPrompt: "Extension-owned prompt" },
+    },
+  });
+  await server.rpc.traces.finish({
+    traceId: external.traceId,
+    outcome: "failed",
+  });
+  const traces = await readTraces(server.workspaceRoot);
+  expect(traces).toHaveLength(1);
+  const extension = traces.find(
+    (trace) => trace.records[0]!.sessionId === "extension-conversation",
+  )!;
+  expect(extension.records[0]).toMatchObject({
+    data: { agent: { id: "expenses", version: "build-12" } },
+  });
+  expect(extension.records.at(-1)).toMatchObject({
+    data: { outcome: "failed" },
+  });
+  await expect(
+    server.rpc.traces.record({
       traceId: external.traceId,
-      event: {
-        type: "model.started",
-        spanId: "1234567890abcdef",
-        parentSpanId: external.spanId,
-        data: { systemPrompt: "Extension-owned prompt" },
-      },
-    });
-    await server.rpc.traces.finish({
-      traceId: external.traceId,
-      outcome: "failed",
-    });
-    const traces = await readTraces(server.workspaceRoot);
-    expect(traces).toHaveLength(2);
-    expect(
-      traces
-        .find((trace) => trace.records[0]!.sessionId === session.sessionId)
-        ?.records.at(-1),
-    ).toMatchObject({ data: { outcome: "cancelled" } });
-    const extension = traces.find(
-      (trace) => trace.records[0]!.sessionId === "extension-conversation",
-    )!;
-    expect(extension.records[0]).toMatchObject({
-      data: { agent: { id: "expenses", version: "build-12" } },
-    });
-    expect(extension.records.at(-1)).toMatchObject({
-      data: { outcome: "failed" },
-    });
-    await expect(
-      server.rpc.traces.record({
-        traceId: external.traceId,
-        event: { type: "late", spanId: external.spanId },
-      }),
-    ).rejects.toThrow();
-    await expect(
-      server.rpc.traces.start({
-        sessionId: "../escape",
-        agent: { id: "expenses" },
-      }),
-    ).rejects.toThrow();
-  },
-);
+      event: { type: "late", spanId: external.spanId },
+    }),
+  ).rejects.toThrow();
+  await expect(
+    server.rpc.traces.start({
+      sessionId: "../escape",
+      agent: { id: "expenses" },
+    }),
+  ).rejects.toThrow();
+});
 
 serverTest(
-  "retries pending uploads after restart without interrupting conversations",
-  async ({ createServer, llm }) => {
+  "retries pending uploads after restart",
+  async ({ createServer }) => {
     const uploads = new Map<string, Buffer>();
     let available = false;
     let attempted = false;
@@ -505,13 +360,18 @@ serverTest(
       },
     });
     await server.start();
-    const session = await server.rpc.sessions.create();
-    const prompt = server.rpc.sessions.prompt({
-      ...session,
-      text: "Work while storage is offline",
+    const run = await server.rpc.traces.start({
+      sessionId: "retry-session",
+      agent: { id: "test" },
     });
-    await llm.respond(m.assistant("Done"));
-    await prompt;
+    await server.rpc.traces.record({
+      traceId: run.traceId,
+      event: { type: "test.event", spanId: run.spanId },
+    });
+    await server.rpc.traces.finish({
+      traceId: run.traceId,
+      outcome: "completed",
+    });
     await expect.poll(() => attempted).toBe(true);
     expect(uploads.size).toBe(0);
     const [pending] = await readTraces(server.workspaceRoot);
@@ -692,6 +552,105 @@ serverTest(
     expect(
       assistantReplies(await server.rpc.sessions.snapshot(bicycle)),
     ).toEqual(["Saved the bicycle.", "Red bicycle → Continue"]);
+  },
+);
+
+serverTest(
+  "resumes pending work when a closed session is reopened without restarting the server",
+  async ({ server, llm }) => {
+    const session = await server.rpc.sessions.create();
+    const prompting = server.rpc.sessions.prompt({
+      ...session,
+      text: "Continue after reopening",
+    });
+    const interrupted = expect(prompting).rejects.toThrow();
+    await llm.waitForRequest();
+    await server.rpc.sessions.close(session);
+    await interrupted;
+    await server.rpc.sessions.snapshot(session);
+    await llm.respond(m.assistant("Resumed after reopening."));
+    await expect
+      .poll(async () =>
+        assistantReplies(await server.rpc.sessions.snapshot(session)),
+      )
+      .toEqual(["Resumed after reopening."]);
+    expect(
+      (await server.rpc.sessions.snapshot(session)).activeRun,
+    ).toBeUndefined();
+  },
+);
+
+serverTest(
+  "resumes an interrupted model request and deduplicates prompt retries across restart",
+  async ({ server, llm }) => {
+    const session = await server.rpc.sessions.create();
+    const input = {
+      ...session,
+      text: "Remember this once",
+      clientMessageId: "durable-retry",
+    };
+    const prompting = server.rpc.sessions.prompt(input);
+    const disconnected = expect(prompting).rejects.toThrow();
+    await llm.waitForRequest();
+    await server.stop();
+    await disconnected;
+    await server.start();
+    await llm.respond(m.assistant("Remembered once."));
+    await expect
+      .poll(async () =>
+        assistantReplies(await server.rpc.sessions.snapshot(session)),
+      )
+      .toEqual(["Remembered once."]);
+    await server.rpc.sessions.prompt(input);
+    const settled = await server.rpc.sessions.snapshot(session);
+    expect(
+      sessionMessages(settled).filter((message) => message.role === "user"),
+    ).toHaveLength(1);
+    await server.stop();
+    await server.start();
+    await server.rpc.sessions.prompt(input);
+    expect(await server.rpc.sessions.snapshot(session)).toEqual(settled);
+  },
+);
+
+serverTest(
+  "keeps full chat history when Durable compacts model context",
+  async ({ server, llm }) => {
+    const old = "Old context. ".repeat(45_000);
+    const recent = "Recent context. ".repeat(6_500);
+    const session = await server.rpc.testApi.seedSession({
+      title: "Long conversation",
+      messages: [
+        { role: "user", content: old, timestamp: Date.now() },
+        { role: "user", content: recent, timestamp: Date.now() },
+      ],
+    });
+    const prompting = server.rpc.sessions.prompt({
+      ...session,
+      text: "Continue after compaction",
+    });
+    await llm.respond(m.assistant("COMPACTED_OLD_CONTEXT"));
+    await llm.respond(({ messages }) => {
+      const context = messages
+        .map((message) => messageText(message))
+        .join("\n");
+      expect(context).toContain("COMPACTED_OLD_CONTEXT");
+      expect(context).not.toContain(old);
+      return m.assistant("Continued with compact context.");
+    });
+    await prompting;
+    const snapshot = await server.rpc.sessions.snapshot(session);
+    expect(
+      sessionMessages(snapshot)
+        .filter((message) => message.role === "user")
+        .map((message) => message.content),
+    ).toEqual([old, recent, "Continue after compaction"]);
+    expect(assistantReplies(snapshot)).toEqual([
+      "Continued with compact context.",
+    ]);
+    await server.stop();
+    await server.start();
+    expect(await server.rpc.sessions.snapshot(session)).toEqual(snapshot);
   },
 );
 
@@ -1624,9 +1583,11 @@ serverTest(
     const watch = await server.rpc.sessions.watch(session, {
       signal: controller.signal,
     });
+    const events: SessionEvent[] = [];
     let live = emptySessionSnapshot();
     const observed = (async () => {
       for await (const item of watch) {
+        if (item.type === "event") events.push(item.event);
         live = reduceSessionUpdate(live, item);
         if (live.lastRun?.status === "completed") break;
       }
@@ -1669,12 +1630,25 @@ serverTest(
     await expect
       .poll(async () => await server.rpc.sessions.snapshot(session))
       .toEqual(live);
+    const runId = live.activeRun!.id;
 
     request.respond("The report is ready.");
+    await llm.waitForRequest();
+    const waiting = await server.rpc.sessions.snapshot(session);
+    expect(waiting.activeRun).toBeDefined();
+    expect(waiting.activeRun!.id).toBe(runId);
+    expect(waiting.lastRun).toBeUndefined();
+    await expect.poll(() => live).toEqual(waiting);
     await llm.respond(m.assistant("Finished the report."));
     await prompt;
     await observed;
     controller.abort();
+    expect(events.filter((event) => event.type === "run.started")).toEqual([
+      { type: "run.started", runId },
+    ]);
+    expect(events.filter((event) => event.type === "run.finished")).toEqual([
+      { type: "run.finished", run: { id: runId, status: "completed" } },
+    ]);
     expect(sessionToolExecutions(live)).toMatchObject([
       {
         id: "report",
@@ -1709,7 +1683,7 @@ serverTest(
       text: "Fetch the report",
     });
     const disconnected = expect(prompting).rejects.toThrow();
-    const command = `curl --silent --fail '${http.url("/pending-report")}'`;
+    const command = `printf x >> replay-count.txt; curl --silent --fail '${http.url("/pending-report")}'`;
     await llm.respond(
       m.tool.start("exec", {
         id: "pending-report",
@@ -1724,6 +1698,23 @@ serverTest(
     await disconnected;
     await server.start();
 
+    await llm.respond(({ messages }) => {
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "tool",
+            tool_call_id: "pending-report",
+            content: expect.stringContaining("interrupted"),
+          }),
+        ]),
+      );
+      return m.assistant("The interrupted report was not rerun.");
+    });
+    await expect
+      .poll(async () =>
+        assistantReplies(await server.rpc.sessions.snapshot(session)),
+      )
+      .toContain("The interrupted report was not rerun.");
     const restored = await server.rpc.sessions.snapshot(session);
     expect(sessionMessages(restored)).toEqual(
       expect.arrayContaining([
@@ -1734,6 +1725,9 @@ serverTest(
     expect(sessionToolExecutions(restored)).toMatchObject([
       { id: "pending-report", type: "exec", status: "failed" },
     ]);
+    expect(
+      await server.rpc.workspace.readFile({ path: "replay-count.txt" }),
+    ).toBe("x");
 
     const continued = server.rpc.sessions.prompt({
       ...session,

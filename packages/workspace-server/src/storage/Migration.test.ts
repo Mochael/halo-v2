@@ -165,6 +165,69 @@ migrationTest(
   },
 );
 
+migrationTest(
+  "drops obsolete session data while preserving unrelated workspace data",
+  ({ migration }) => {
+    const legacyMigrations = workspaceMigrations.slice(0, -1);
+    const legacy = migration.open(legacyMigrations);
+    legacy.exec(`
+      INSERT INTO halo_sessions (id, metadata, next_seq, stats, marked_done, read_receipt_cursor_id)
+        VALUES ('old-session', '{"id":"old-session","createdAt":1}', 2, '{}', 1, 'cursor');
+      INSERT INTO halo_session_entries (session_id, id, seq, timestamp, type, payload)
+        VALUES ('old-session', 'entry', 1, 1, 'message', '{}');
+      INSERT INTO halo_session_values (session_id, namespace, key, seq, payload)
+        VALUES ('old-session', 'namespace', 'value', 1, '{}');
+      INSERT INTO halo_session_lists (session_id, namespace, key, seq, payload)
+        VALUES ('old-session', 'namespace', 'list', 1, '{}');
+      INSERT INTO halo_session_usage (session_id, id, seq, payload)
+        VALUES ('old-session', 'usage', 1, '{}');
+      INSERT INTO user_hotkeys (user_id, hotkeys)
+        VALUES ('user', '{"command":"Ctrl+K"}');
+      INSERT INTO halo_routines (id, name, cron, timezone, action, enabled, created_at, updated_at)
+        VALUES ('routine', 'Daily notes', '0 8 * * *', 'UTC', '{"type":"runAgent","prompt":"Summarize"}', 0, 1, 1);
+      INSERT INTO halo_routine_runs (id, routine_id, trigger, scheduled_for, session_id, status, started_at)
+        VALUES ('running', 'routine', 'manual', 1, 'old-session', 'running', 1),
+               ('completed', 'routine', 'manual', 2, 'old-session', 'completed', 2);
+    `);
+    migration.close(legacy);
+
+    const upgraded = migration.open(workspaceMigrations);
+    expect(
+      upgraded
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'table'
+            AND name IN ('halo_session_entries', 'halo_session_values', 'halo_session_lists', 'halo_session_usage')`,
+        )
+        .all(),
+    ).toEqual([]);
+    expect(upgraded.prepare("SELECT * FROM halo_sessions").all()).toEqual([]);
+    expect(
+      upgraded
+        .prepare("PRAGMA table_info(halo_sessions)")
+        .all()
+        .map(
+          (row) =>
+            // SAFETY: SQLite's table_info pragma returns a name for every column.
+            (row as { name: string }).name,
+        ),
+    ).toEqual(["id", "metadata", "marked_done", "read_receipt_cursor_id"]);
+    expect(upgraded.prepare("SELECT * FROM user_hotkeys").all()).toEqual([
+      { user_id: "user", hotkeys: '{"command":"Ctrl+K"}' },
+    ]);
+    // Recovery can interrupt unfinished routines without opening discarded sessions.
+    expect(
+      upgraded
+        .prepare(
+          "SELECT id, status, session_id IS NULL AS detached FROM halo_routine_runs ORDER BY id",
+        )
+        .all(),
+    ).toEqual([
+      { id: "completed", status: "completed", detached: 1 },
+      { id: "running", status: "running", detached: 1 },
+    ]);
+  },
+);
+
 migrationTest("rejects changes to an applied migration", ({ migration }) => {
   const initial = migration.open([initialMigration]);
   migration.close(initial);

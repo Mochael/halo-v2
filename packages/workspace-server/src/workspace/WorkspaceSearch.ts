@@ -6,14 +6,13 @@ import type {
   WorkspaceSearchHit,
   WorkspaceSearchResponse,
 } from "@get-halo/client";
-import type { DatabaseClient } from "../storage/DatabaseClient.js";
-import { decodeSessionJson } from "../storage/sessionSchema.js";
+import { SessionProjection } from "../agent/SessionProjection.js";
+import type { SessionRepoApi } from "../storage/SessionRepoApi.js";
 import type { WorkspaceService } from "./WorkspaceService.js";
 
 const maxFileBytes = 5 * 1024 * 1024;
 const maxFileHits = 60;
 const maxSessionHits = 40;
-const pageSize = 100;
 const excludedExtensions = new Set([
   ".pdf",
   ".doc",
@@ -167,11 +166,11 @@ function messageSegments(entry: HaloEntry) {
 
 export class WorkspaceSearch {
   private readonly workspace: WorkspaceService;
-  private readonly database: DatabaseClient;
+  private readonly repo: SessionRepoApi;
 
-  constructor(ctx: { workspace: WorkspaceService; database: DatabaseClient }) {
+  constructor(ctx: { workspace: WorkspaceService; repo: SessionRepoApi }) {
     this.workspace = ctx.workspace;
-    this.database = ctx.database;
+    this.repo = ctx.repo;
   }
 
   async search(
@@ -279,26 +278,29 @@ export class WorkspaceSearch {
   }
 
   private async searchSessions(needle: string, signal?: AbortSignal) {
-    const sessions = await this.database.access((connection) => {
-      // SAFETY: The projection matches Halo's session and session-name tables.
-      return connection
-        .prepare(
-          "SELECT s.id, v.payload AS name FROM halo_sessions s LEFT JOIN halo_session_values v ON v.session_id = s.id AND v.namespace = 'pi.session.name' AND v.key = '' ORDER BY s.id",
-        )
-        .all() as { id: string; name: string | null }[];
-    });
-    if (sessions instanceof Error)
-      return new WorkspaceSearchError({ cause: sessions });
+    const sessions = await this.repo
+      .list()
+      .catch((cause) => new WorkspaceSearchError({ cause }));
+    if (sessions instanceof Error) return sessions;
     const hits: WorkspaceSearchHit[] = [];
     let truncated = false;
     for (const session of sessions) {
       if (signal?.aborted || truncated) break;
-      let title =
-        session.name === null ? "" : decodeSessionJson<string>(session.name);
-      let seq = 0;
+      const data = await this.repo
+        .read(session.id)
+        .catch((cause) => new WorkspaceSearchError({ cause }));
+      if (data instanceof Error) return data;
+      const projection = new SessionProjection(data);
+      const snapshot = projection.snapshot();
+      const title = projection.title(snapshot);
       let matchIndex = 0;
-      const titleOffset = title.toLocaleLowerCase().indexOf(needle);
-      if (titleOffset !== -1)
+      const titleOffset =
+        projection.name?.toLocaleLowerCase().indexOf(needle) ?? -1;
+      if (titleOffset !== -1) {
+        if (hits.length >= maxSessionHits) {
+          truncated = true;
+          break;
+        }
         hits.push({
           kind: "session",
           sessionId: session.id,
@@ -311,58 +313,32 @@ export class WorkspaceSearch {
           source: "name",
           matchIndex: 0,
         });
-      while (true) {
-        if (signal?.aborted) break;
-        const page = await this.database.access((connection) => {
-          // SAFETY: The projection matches Halo's persisted session entry table.
-          return connection
-            .prepare(
-              "SELECT seq, payload FROM halo_session_entries WHERE session_id = ? AND type = 'message' AND seq > ? ORDER BY seq LIMIT ?",
-            )
-            .all(session.id, seq, pageSize) as {
-            seq: number;
-            payload: string;
-          }[];
-        });
-        if (page instanceof Error)
-          return new WorkspaceSearchError({ cause: page });
-        if (page.length === 0) break;
-        for (const row of page) {
-          const entry = decodeSessionJson<HaloEntry>(row.payload);
-          for (const segment of messageSegments(entry)) {
-            if (
-              title.length === 0 &&
-              entry.type === "message" &&
-              entry.message.role === "user"
-            ) {
-              title = segment.text.slice(0, 120);
+      }
+      for (const entry of snapshot.entries) {
+        if (signal?.aborted || truncated) break;
+        for (const segment of messageSegments(entry)) {
+          for (const offset of occurrences(
+            segment.text,
+            needle,
+            maxSessionHits - hits.length + 1,
+          )) {
+            if (hits.length >= maxSessionHits) {
+              truncated = true;
+              break;
             }
-            for (const offset of occurrences(
-              segment.text,
-              needle,
-              maxSessionHits - hits.length + 1,
-            )) {
-              if (hits.length >= maxSessionHits) {
-                truncated = true;
-                break;
-              }
-              hits.push({
-                kind: "session",
-                sessionId: session.id,
-                title: title || "Session",
-                ...snippet(segment.text, offset, needle.length),
-                source: "content",
-                matchIndex: matchIndex++,
-                segmentId: segment.id,
-                offset,
-              });
-            }
-            if (truncated) break;
+            hits.push({
+              kind: "session",
+              sessionId: session.id,
+              title: title || "Session",
+              ...snippet(segment.text, offset, needle.length),
+              source: "content",
+              matchIndex: matchIndex++,
+              segmentId: segment.id,
+              offset,
+            });
           }
           if (truncated) break;
         }
-        seq = page.at(-1)!.seq;
-        if (page.length < pageSize || truncated) break;
       }
     }
     return { hits, truncated };
