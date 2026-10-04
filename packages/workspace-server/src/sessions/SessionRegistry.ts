@@ -54,6 +54,8 @@ type PiSessionSummary = Omit<
 
 export class SessionRegistry {
   private closing = false;
+  // Recovery opens sessions paused until interrupted routines have been aborted.
+  private started = false;
   private readonly closed = new AbortController();
   // Serializes snapshots and updates so reconnect cannot miss a transition.
   private readonly summaryQueue = new SerialQueue();
@@ -105,6 +107,7 @@ export class SessionRegistry {
       if (session instanceof Error) return session;
       session.resume();
     }
+    this.started = true;
   }
 
   async *watchSummaries(
@@ -397,6 +400,7 @@ export class SessionRegistry {
       if (closed instanceof Error) console.warn(closed);
       return published;
     }
+    if (this.started) session.resume();
     return session;
   }
 

@@ -1372,6 +1372,9 @@ function sessionDatabase(
         }
       });
     },
-    async close() {},
+    async close() {
+      // Drain admitted database operations without closing the workspace's shared connection.
+      await access(() => undefined);
+    },
   };
 }

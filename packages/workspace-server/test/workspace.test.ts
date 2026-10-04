@@ -556,6 +556,31 @@ serverTest(
 );
 
 serverTest(
+  "resumes pending work when a closed session is reopened without restarting the server",
+  async ({ server, llm }) => {
+    const session = await server.rpc.sessions.create();
+    const prompting = server.rpc.sessions.prompt({
+      ...session,
+      text: "Continue after reopening",
+    });
+    const interrupted = expect(prompting).rejects.toThrow();
+    await llm.waitForRequest();
+    await server.rpc.sessions.close(session);
+    await interrupted;
+    await server.rpc.sessions.snapshot(session);
+    await llm.respond(m.assistant("Resumed after reopening."));
+    await expect
+      .poll(async () =>
+        assistantReplies(await server.rpc.sessions.snapshot(session)),
+      )
+      .toEqual(["Resumed after reopening."]);
+    expect(
+      (await server.rpc.sessions.snapshot(session)).activeRun,
+    ).toBeUndefined();
+  },
+);
+
+serverTest(
   "resumes an interrupted model request and deduplicates prompt retries across restart",
   async ({ server, llm }) => {
     const session = await server.rpc.sessions.create();

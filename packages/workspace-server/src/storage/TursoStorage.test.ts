@@ -43,6 +43,31 @@ registerStorageConformance(
 );
 
 piBackendTest(
+  "drains admitted commits before releasing a session",
+  async ({ piBackend }) => {
+    const handle = await piBackend.repo.create();
+    const finished: string[] = [];
+    const committing = handle.storage
+      .commit(
+        [{ type: "conversation", value: { id: 1 as ConversationId } }],
+        BACKGROUND_CONTEXT,
+      )
+      .then(() => finished.push("commit"));
+    const closing = handle.close().then(() => finished.push("close"));
+    await closing;
+    expect(finished).toEqual(["commit", "close"]);
+    await committing;
+    const reopened = await piBackend.repo.open(handle.metadata);
+    expect(
+      await reopened.storage.conversation(
+        1 as ConversationId,
+        BACKGROUND_CONTEXT,
+      ),
+    ).toEqual({ id: 1 });
+  },
+);
+
+piBackendTest(
   "reports fatal commit failures through the session handle and preserves the rejection",
   async ({ piBackend }) => {
     const handle = await piBackend.repo.create();

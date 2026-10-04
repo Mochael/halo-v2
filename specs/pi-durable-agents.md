@@ -121,6 +121,8 @@ activeRunId = firstInputSubmissionId // stable across model/tool rounds
 - [x] Preserve prompt retry deduplication, tool progress, parallel tools, and unsafe-tool recovery semantics.
 - [x] Keep client tool activity in model-call order even when parallel results arrive out of order.
 - [x] Abort interrupted routine sessions before ordinary session resumption.
+- [x] Resume pending work when a session is explicitly reopened after startup, while keeping startup recovery paused.
+- [x] Drain admitted database operations before closing a storage handle and releasing its session reservation.
 - [x] Deliver fatal storage failures to clients rather than leaving a stale running state.
 - [x] Remove automatic Pi tracing and legacy entry import/dual-write paths.
 
@@ -129,8 +131,8 @@ activeRunId = firstInputSubmissionId // stable across model/tool rounds
 ### Verification evidence and limitations
 
 - All-package lint, format, typecheck, and unit tasks passed: 53 tasks without cache reuse.
-- Latest workspace-server E2Es passed: 118 tests. The full run exposed tool-activity ordering after restoring parallel execution; the client projection now preserves model-call order, with a regression covering out-of-order completion.
-- Final Electron run: 110 passed, 4 failed. All four failures also reproduced on an untouched `origin/main` checkout: heading removal with Backspace, one-character formatting reveal, Markdown find-selection restoration (intermittent), and specific attachment-error text. The earlier long-note scrolling timeout passed in the final full run. This is not a green full suite; the PR records these exceptions explicitly.
+- Latest workspace-server E2Es passed: 119 tests, including explicitly reopening pending work. Storage regression coverage verifies close waits for admitted commits. Both review regressions failed before their fixes and passed afterward. The earlier full run exposed tool-activity ordering after restoring parallel execution; the client projection now preserves model-call order, with a regression covering out-of-order completion.
+- Latest Electron run after review fixes: 110 passed, 4 failed. Baseline-reproduced failures are heading removal with Backspace, one-character formatting reveal, specific attachment-error text, and the 30-second unread-session timeout. The unread test passed an isolated branch retry (29.8s) and three isolated baseline runs, but timed out in all four baseline repetitions at the full suite's four-worker concurrency. Earlier search-selection and long-note scrolling failures passed this run. This is not a green full suite; the PR records these exceptions explicitly.
 - Real Together inference was exercised through Electron: write/read a file, restart the full dev stack, recall the conversation, then read through `exec`. The resulting screenshot was inspected.
 - Full all-package E2Es ran without cache reuse. Other package results: client 7 passed, extension tools 4 passed, logger 2 passed, control-plane 20 passed / 1 skipped. Only the Electron task failed.
 
