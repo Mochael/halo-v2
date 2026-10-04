@@ -212,6 +212,8 @@ function prepareWorkspaceRequest(
   delete request.headers.forwarded;
   delete request.headers["x-forwarded-host"];
   delete request.headers["x-forwarded-proto"];
+  delete request.headers["x-halo-public-host"];
+  delete request.headers["x-halo-public-proto"];
   delete request.headers["x-exedev-authorization"];
   delete request.headers["x-exedev-token-ctx"];
   delete request.headers["x-exedev-userid"];
@@ -223,6 +225,9 @@ function prepareWorkspaceRequest(
   request.headers.host = target.host;
   request.headers["x-forwarded-host"] = publicOrigin.host;
   request.headers["x-forwarded-proto"] = publicOrigin.protocol.slice(0, -1);
+  // Provider proxies rewrite X-Forwarded-*; preserve Halo's origin separately.
+  request.headers["x-halo-public-host"] = publicOrigin.host;
+  request.headers["x-halo-public-proto"] = publicOrigin.protocol.slice(0, -1);
   request.url = `${target.pathname}${target.search}`;
 }
 

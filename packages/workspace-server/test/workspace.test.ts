@@ -2404,8 +2404,11 @@ serverTest(
     const url = `${server.transport.origin}/extensions/origin-test/view/`;
     const forwarded = {
       host: "private-vm.exe.xyz:8788",
-      "x-forwarded-host": "halo.example:8443",
+      // Exe rewrites these to describe its own proxy hop.
+      "x-forwarded-host": "private-vm.exe.xyz:8788",
       "x-forwarded-proto": "https",
+      "x-halo-public-host": "halo.example:8443",
+      "x-halo-public-proto": "https",
       cookie: "private-cookie",
       "x-exedev-authorization": "Bearer private-provider-token",
       "x-exedev-token-ctx": "private-token-context",
@@ -2426,6 +2429,8 @@ serverTest(
     for (const name of [
       "authorization",
       "cookie",
+      "x-halo-public-host",
+      "x-halo-public-proto",
       "x-exedev-authorization",
       "x-exedev-token-ctx",
       "x-exedev-userid",

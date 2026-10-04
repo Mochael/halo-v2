@@ -18,9 +18,11 @@ class ExeWorkspaceProviderError extends errore.createTaggedError({
 const vmSchema = Type.Object({
   vm_name: Type.String(),
   status: Type.String(),
+  // Verified on the real /exec ls response, including a newly cloned private VM.
   proxy_share: Type.String(),
 });
 const listSchema = Type.Object({ vms: Type.Array(vmSchema) });
+// Verified on real /exec cp: it returns name, whereas new returns vm_name.
 const cloneSchema = Type.Object({ name: Type.String() });
 
 export class ExeWorkspaceProvider implements WorkspaceProviderApi {

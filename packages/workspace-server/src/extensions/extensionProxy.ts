@@ -128,10 +128,11 @@ function prepareRequest(ctx: {
   const { request, target, fromGateway } = ctx;
   // Only the authenticated control plane can supply the public origin.
   const publicHost = fromGateway
-    ? (firstHeader(request.headers["x-forwarded-host"]) ?? request.headers.host)
+    ? (firstHeader(request.headers["x-halo-public-host"]) ??
+      request.headers.host)
     : request.headers.host;
   const forwardedProtocol = fromGateway
-    ? firstHeader(request.headers["x-forwarded-proto"])
+    ? firstHeader(request.headers["x-halo-public-proto"])
     : undefined;
   removePrivateHeaders(request.headers);
   request.headers.host = target.host;
@@ -147,6 +148,8 @@ function removePrivateHeaders(headers: IncomingHttpHeaders) {
   delete headers.forwarded;
   delete headers["x-forwarded-host"];
   delete headers["x-forwarded-proto"];
+  delete headers["x-halo-public-host"];
+  delete headers["x-halo-public-proto"];
   delete headers["x-exedev-authorization"];
   delete headers["x-exedev-token-ctx"];
   delete headers["x-exedev-userid"];

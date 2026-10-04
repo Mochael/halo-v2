@@ -33,6 +33,12 @@ class WorkspaceHostDriver {
         response.writeHead(401).end();
         return;
       }
+      if (request.url === "/headers") {
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end(JSON.stringify(request.headers));
+        return;
+      }
       response
         .writeHead(200, { "content-type": "application/json" })
         .end(JSON.stringify({ workspace: "test-workspace" }));
@@ -424,6 +430,18 @@ providerControlPlaneTest(
     });
     expect(beforeEnsure.status).toBe(200);
     expect(await beforeEnsure.json()).toEqual({ workspace: "test-workspace" });
+
+    const spoofed = new Headers(browserHeaders);
+    spoofed.set("x-halo-public-host", "attacker.example");
+    spoofed.set("x-halo-public-proto", "https");
+    const forwarded = await fetch(`${plane.origin}/workspace/headers`, {
+      headers: spoofed,
+    });
+    expect(forwarded.status).toBe(200);
+    expect(await forwarded.json()).toMatchObject({
+      "x-halo-public-host": new URL(plane.origin).host,
+      "x-halo-public-proto": "http",
+    });
 
     const rpc = createControlPlaneRpcClient(plane.origin, browserHeaders);
     const [first, concurrent] = await Promise.all([
