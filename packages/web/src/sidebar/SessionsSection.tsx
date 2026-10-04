@@ -35,6 +35,7 @@ function SessionRow({ session }: { session: SessionSummary }) {
       leading={<SessionActivity session={session} />}
       hoverTrailing={
         <Button
+          size="sm"
           variant="quiet"
           aria-label="Mark done"
           isDisabled={mutation.isPending}

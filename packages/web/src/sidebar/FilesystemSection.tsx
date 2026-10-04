@@ -443,7 +443,7 @@ function FileNavigationItem({
           }}
         />
       )}
-      trailing={
+      hoverTrailing={
         <FileMenu
           label={`Actions for ${node.name}`}
           node={{ path, isDirectory: node.isDirectory }}
@@ -499,14 +499,13 @@ function FileMenu({
   onAction(action: FileAction): void;
   disabled?: boolean;
 }) {
-  const button = useStyles(styles.menuButton);
   const parent = node.path;
   return (
     <MenuTrigger>
       <Button
+        size="sm"
         variant="quiet"
         aria-label={label}
-        className={button}
         isDisabled={disabled}
       >
         <DotsHorizontal size="sm" />
@@ -594,8 +593,6 @@ function fileRoute(path: string) {
 
 const styles = {
   controls: style(flex({ alignItems: "center", gap: 1 })),
-  // Pull the 28px button into the row's block padding so file rows stay compact.
-  menuButton: style({ marginBlock: "-2px" }),
   fileLabel: style({
     display: "block",
     width: "100%",
