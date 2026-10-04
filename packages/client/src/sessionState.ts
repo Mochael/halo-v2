@@ -443,12 +443,15 @@ export function sessionToolExecutions(
   snapshot: SessionSnapshot,
 ): ToolExecution[] {
   const requests = new Map<string, ToolExecution["arguments"]>();
-  const executions = new Map<string, ToolExecution>();
+  const executions = new Map<string, ToolExecution | undefined>();
   for (const entry of snapshot.entries) {
     if (entry.type === "message") {
       if (entry.message.role !== "assistant") continue;
       for (const part of entry.message.content) {
-        if (part.type === "toolCall") requests.set(part.id, part.arguments);
+        if (part.type !== "toolCall") continue;
+        requests.set(part.id, part.arguments);
+        // Reserve model-call order even when parallel tools finish out of order.
+        executions.set(part.id, undefined);
       }
       continue;
     }
@@ -463,5 +466,5 @@ export function sessionToolExecutions(
   }
   if (snapshot.activeRun !== undefined)
     for (const tool of snapshot.activeRun.tools) executions.set(tool.id, tool);
-  return [...executions.values()];
+  return [...executions.values()].filter((tool) => tool !== undefined);
 }
