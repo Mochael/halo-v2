@@ -131,8 +131,11 @@ export class WorkspaceGateway {
   }
 
   private async getAuthorization(connection: WorkspaceProviderConnection) {
-    if (connection.authorization.type === "bearer") {
+    if (connection.authorization.type === "headers") {
       return connection.authorization.value;
+    }
+    if (connection.authorization.type === "bearer") {
+      return { authorization: connection.authorization.value };
     }
 
     const audience = connection.origin;
@@ -165,12 +168,12 @@ export class WorkspaceGateway {
       });
     }
 
-    return authorization;
+    return { authorization };
   }
 }
 
 async function forwardWorkspaceRequest(ctx: {
-  authorization: string;
+  authorization: Readonly<Record<string, string>>;
   origin: string;
   publicOrigin: URL;
   request: IncomingMessage;
@@ -201,7 +204,7 @@ async function forwardWorkspaceRequest(ctx: {
 function prepareWorkspaceRequest(
   request: IncomingMessage,
   target: URL,
-  authorization: string,
+  authorization: Readonly<Record<string, string>>,
   publicOrigin: URL,
 ) {
   delete request.headers.authorization;
@@ -209,8 +212,15 @@ function prepareWorkspaceRequest(
   delete request.headers.forwarded;
   delete request.headers["x-forwarded-host"];
   delete request.headers["x-forwarded-proto"];
-  request.headers.authorization = authorization;
-  request.headers.host = publicOrigin.host;
+  delete request.headers["x-exedev-authorization"];
+  delete request.headers["x-exedev-token-ctx"];
+  delete request.headers["x-exedev-userid"];
+  delete request.headers["x-exedev-email"];
+  for (const [name, value] of Object.entries(authorization)) {
+    request.headers[name.toLowerCase()] = value;
+  }
+  // Private provider ingress routes by Host; Halo uses the forwarded public origin.
+  request.headers.host = target.host;
   request.headers["x-forwarded-host"] = publicOrigin.host;
   request.headers["x-forwarded-proto"] = publicOrigin.protocol.slice(0, -1);
   request.url = `${target.pathname}${target.search}`;

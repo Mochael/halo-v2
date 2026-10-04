@@ -45,10 +45,9 @@ type HaloHttpConnections = {
   renderer: HaloHttpConnection;
 };
 
-export type WorkspaceGatewayIdentity = {
-  audience: string;
-  serviceAccountEmail: string;
-};
+export type WorkspaceGatewayIdentity =
+  | { audience: string; serviceAccountEmail: string }
+  | { token: string };
 
 export type ListeningHaloHttp = {
   connections: HaloHttpConnections;
@@ -342,6 +341,17 @@ async function authorizeWorkspaceRequest(ctx: {
   if (ctx.authorization === undefined || ctx.gateway === undefined)
     return undefined;
   if (!ctx.authorization.startsWith("Bearer ")) return undefined;
+
+  if ("token" in ctx.gateway) {
+    const supplied = Buffer.from(ctx.authorization.slice("Bearer ".length));
+    const expected = Buffer.from(ctx.gateway.token);
+    if (
+      supplied.length === expected.length &&
+      crypto.timingSafeEqual(supplied, expected)
+    )
+      return "gateway" as const;
+    return undefined;
+  }
 
   const ticket = await ctx.identityVerifier
     .verifyIdToken({

@@ -13,6 +13,11 @@ export type WorkspaceProviderConnection = {
         /** Complete Authorization header value, including the Bearer prefix. */
         value: string;
       }
+    | {
+        type: "headers";
+        /** Complete provider credentials for private HTTP and WebSocket ingress. */
+        value: Readonly<Record<string, string>>;
+      }
     | { type: "googleIdentity" };
 };
 

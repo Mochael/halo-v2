@@ -36,10 +36,13 @@ export const workspaceServerConfigSchema = Type.Object({
   ),
   corsOrigins: Type.Array(Type.String()),
   gateway: Type.Optional(
-    Type.Object({
-      audience: Type.String({ minLength: 1 }),
-      serviceAccountEmail: Type.String({ minLength: 1 }),
-    }),
+    Type.Union([
+      Type.Object({
+        audience: Type.String({ minLength: 1 }),
+        serviceAccountEmail: Type.String({ minLength: 1 }),
+      }),
+      Type.Object({ token: Type.String({ minLength: 32 }) }),
+    ]),
   ),
   port: Type.Integer({ minimum: 0, maximum: 65_535 }),
   cliEntry: Type.Optional(Type.String()),

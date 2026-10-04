@@ -29,6 +29,12 @@ const gcpWorkspaceSchema = Type.Object({
   projectId: Type.String({ minLength: 1 }),
   zone: Type.String({ minLength: 1 }),
 });
+const exeWorkspaceSchema = Type.Object({
+  deployment: Type.Literal("exe"),
+  templateVmName: Type.String({ pattern: "^[a-z][a-z0-9-]{0,62}$" }),
+  privateKeyPath: Type.String({ minLength: 1 }),
+  gatewaySecret: Type.String({ minLength: 32 }),
+});
 
 export const controlPlaneConfigSchema = Type.Union([
   Type.Object({
@@ -36,7 +42,7 @@ export const controlPlaneConfigSchema = Type.Union([
     appDataDir: Type.String(),
     port: portSchema,
     auth: authSchema,
-    workspace: localWorkspaceSchema,
+    workspace: Type.Union([localWorkspaceSchema, exeWorkspaceSchema]),
   }),
   Type.Object({
     deployment: Type.Literal("cloudRun"),
@@ -46,7 +52,7 @@ export const controlPlaneConfigSchema = Type.Union([
     traceBucket: Type.String({ minLength: 1 }),
     workspaceServiceAccount: Type.String({ minLength: 1 }),
     auth: authSchema,
-    workspace: gcpWorkspaceSchema,
+    workspace: Type.Union([gcpWorkspaceSchema, exeWorkspaceSchema]),
   }),
 ]);
 
