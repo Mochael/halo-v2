@@ -10,6 +10,7 @@ import type { WorkspaceServerOptions } from "@get-halo/workspace-server";
 vi.setConfig({ testTimeout: 20_000 });
 
 type ServerOptions = {
+  gateway?: WorkspaceServerOptions["config"]["gateway"];
   workspaceRoot?: string;
   testApiEnabled?: boolean;
   traceUploader?: WorkspaceServerOptions["host"]["traceUploader"];
@@ -51,6 +52,7 @@ export const serverTest = baseTest.extend<{
     await using cleanup = new errore.AsyncDisposableStack();
     await use((options = {}) => {
       const server = new TestServer({
+        gateway: options.gateway,
         artifacts,
         llmApi: createOpenAILLMApi(llm.configuration),
         traceUploader: options.traceUploader,

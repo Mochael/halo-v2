@@ -4,7 +4,10 @@ FROM node:22-bookworm-slim AS runtime
 
 WORKDIR /opt/halo
 
-RUN npm install --global pnpm@12.1.0
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --global pnpm@12.1.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
 # Install dependencies before copying sources so code changes reuse this layer.
