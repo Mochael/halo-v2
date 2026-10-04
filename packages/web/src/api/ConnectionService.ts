@@ -176,7 +176,7 @@ export class ConnectionService {
                 "server.info",
                 "server.watch",
                 "workspace.get",
-                "sessions.watch",
+                "thread.events",
               ].includes(path.join("."))),
           onDisconnect: (error) => {
             if (generation === this.generation && this.state.api !== undefined)

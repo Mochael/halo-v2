@@ -141,7 +141,7 @@ export class WebHost implements HostApi {
         operation: "start a connection without a workspace",
       });
     }
-    const started = await this.haloClient.sessions
+    const started = await this.haloClient.thread
       .startConnection({
         ...input,
         completion: {
@@ -169,7 +169,7 @@ export class WebHost implements HostApi {
         operation: "cancel a connection without a workspace",
       });
     }
-    return await this.haloClient.sessions
+    return await this.haloClient.thread
       .cancelConnection(input)
       .then(() => undefined)
       .catch(

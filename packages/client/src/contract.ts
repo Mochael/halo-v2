@@ -26,8 +26,8 @@ import type {
   WorkspaceTreeEvent,
 } from "./rpc.js";
 
-export const haloProtocolVersion = 23 as const;
-export const haloSupportedProtocols = [18, 19, 21, 22, haloProtocolVersion];
+export const haloProtocolVersion = 24 as const;
+export const haloSupportedProtocols = [haloProtocolVersion];
 
 export const RequestRejectedError = error("BAD_REQUEST", {
   message: "Halo could not complete the request.",
@@ -165,7 +165,7 @@ export const contract = publicProcedure.router({
       .input(type<{ routineId: string; limit?: number }>())
       .output(type<RoutineRun[]>()),
   },
-  sessions: {
+  thread: {
     list: oc.output(type<SessionSummary[]>()),
     watchSummaries: oc.output(
       asyncIteratorObject(type<SessionSummariesUpdate>()),
@@ -176,14 +176,24 @@ export const contract = publicProcedure.router({
     markUnread: oc.input(type<{ sessionId: string }>()).output(type<void>()),
     markDone: oc.input(type<{ sessionId: string }>()).output(type<void>()),
     markUndone: oc.input(type<{ sessionId: string }>()).output(type<void>()),
-    create: oc.output(type<{ sessionId: string }>()),
+    new: oc
+      .input(type<{ requestId?: string } | undefined>())
+      .output(type<{ sessionId: string }>()),
     snapshot: oc
       .input(type<{ sessionId: string }>())
       .output(type<SessionSnapshot>()),
-    watch: oc
+    events: oc
       .input(type<{ sessionId: string }>())
       .output(asyncIteratorObject(type<SessionWatchItem>())),
-    prompt: oc.input(type<ChatPrompt & { sessionId: string }>()),
+    prompt: oc
+      .input(type<ChatPrompt & { sessionId: string }>())
+      .output(type<{ submissionId: number }>()),
+    wait: oc.input(type<{ sessionId: string; submissionId: number }>()).output(
+      type<{
+        status: "completed" | "aborted" | "failed";
+        error?: { message: string };
+      }>(),
+    ),
     startConnection: oc
       .input(
         type<{

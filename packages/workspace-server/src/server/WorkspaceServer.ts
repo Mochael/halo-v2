@@ -4,7 +4,7 @@ import { RoutineRunner } from "../routines/RoutineRunner.js";
 import { RoutineScheduler } from "../routines/RoutineScheduler.js";
 import { createHotkeysPlugin } from "../hotkeys/createHotkeysPlugin.js";
 import path from "node:path";
-import { TursoSessionRepo } from "../storage/TursoSessionRepo.js";
+import { TursoThreadRepo } from "../storage/TursoThreadRepo.js";
 import { DatabaseClient } from "../storage/DatabaseClient.js";
 import { BrowserService } from "../browser/BrowserService.js";
 import type { Logger } from "@get-halo/logger";
@@ -12,7 +12,7 @@ import * as errore from "errore";
 import { FilesystemService } from "../filesystem/FilesystemService.js";
 import { ExtensionHost } from "../extensions/ExtensionHost.js";
 import type { ExtensionRuntime } from "../extensions/startExtension.js";
-import { SessionRegistry } from "../sessions/SessionRegistry.js";
+import { ThreadManager } from "../sessions/ThreadManager.js";
 import { WorkspaceService } from "../workspace/WorkspaceService.js";
 import { WorkspaceSearch } from "../workspace/WorkspaceSearch.js";
 import { StaticAgentAuthority } from "../agent/runtime/AgentAuthority.js";
@@ -84,9 +84,9 @@ export type WorkspaceServerOptions = {
 export class WorkspaceServer {
   private readonly filesystem: FilesystemService;
   private readonly database: DatabaseClient;
-  private readonly sessionRepo: TursoSessionRepo;
+  private readonly sessionRepo: TursoThreadRepo;
   private readonly workspace: WorkspaceService;
-  private readonly sessions: SessionRegistry;
+  private readonly sessions: ThreadManager;
   private readonly routineRunner: RoutineRunner;
   private readonly routineScheduler: RoutineScheduler;
   private readonly toolRuntime: ToolRuntime;
@@ -100,9 +100,9 @@ export class WorkspaceServer {
   private constructor(ctx: {
     filesystem: FilesystemService;
     database: DatabaseClient;
-    sessionRepo: TursoSessionRepo;
+    sessionRepo: TursoThreadRepo;
     workspace: WorkspaceService;
-    sessions: SessionRegistry;
+    sessions: ThreadManager;
     routineRunner: RoutineRunner;
     routineScheduler: RoutineScheduler;
     toolRuntime: ToolRuntime;
@@ -213,7 +213,7 @@ export class WorkspaceServer {
           error: closed,
         });
     });
-    const sessionRepo = new TursoSessionRepo(database);
+    const sessionRepo = new TursoThreadRepo(database);
     const search = new WorkspaceSearch({ workspace, repo: sessionRepo });
     cleanup.defer(async () => {
       const closed = await sessionRepo.close();
@@ -281,7 +281,7 @@ export class WorkspaceServer {
     cleanup.defer(async () => await extensions.stop());
     const browsers = new BrowserService();
     cleanup.defer(async () => await browsers.shutdown());
-    const sessions = new SessionRegistry({
+    const sessions = new ThreadManager({
       environment: config.environment,
       repo: sessionRepo,
       llmApi: host.llmApi,

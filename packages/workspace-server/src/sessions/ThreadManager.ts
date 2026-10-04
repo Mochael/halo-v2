@@ -1,22 +1,27 @@
 import * as errore from "errore";
+import { createHash } from "node:crypto";
 import { Stream } from "@get-halo/shared/Stream";
 import { SerialQueue } from "@get-halo/shared/SerialQueue";
 import {
   isThreadUnread,
   type SessionSummary,
   type SessionSummariesUpdate,
+  type ChatPrompt,
+  type HaloMessage,
+  type HaloConnectionState,
+  type HaloConnectionEvent,
 } from "@get-halo/client";
 import {
-  HaloAgentSession,
+  Thread,
   CreateAgentSessionError,
-  type HaloAgentSessionOptions,
-} from "../agent/HaloAgentSession.js";
+  type ThreadOptions,
+} from "../agent/Thread.js";
 import type {
-  SessionProductFields,
-  SessionRepoApi,
-  SessionHandle,
-  SessionMetadata,
-} from "../storage/SessionRepoApi.js";
+  ThreadProductFields,
+  ThreadRepoApi,
+  ThreadHandle,
+  ThreadMetadata,
+} from "../storage/ThreadRepoApi.js";
 
 export class SessionNotFoundError extends errore.createTaggedError({
   name: "SessionNotFoundError",
@@ -38,13 +43,13 @@ export class SessionNotOpenError extends errore.createTaggedError({
   message: "Agent session '$sessionId' is not open.",
 }) {}
 
-class SessionRegistryClosedError extends errore.createTaggedError({
-  name: "SessionRegistryClosedError",
+class ThreadManagerClosedError extends errore.createTaggedError({
+  name: "ThreadManagerClosedError",
   message: "The server is shutting down.",
 }) {}
 
-type SessionRegistryOptions = HaloAgentSessionOptions & {
-  repo: SessionRepoApi;
+type ThreadManagerOptions = ThreadOptions & {
+  repo: ThreadRepoApi;
 };
 
 type PiSessionSummary = Omit<
@@ -52,35 +57,33 @@ type PiSessionSummary = Omit<
   "markedDone" | "readReceiptCursorId"
 >;
 
-export class SessionRegistry {
+export class ThreadManager {
   private closing = false;
   // Recovery opens sessions paused until interrupted routines have been aborted.
   private started = false;
   private readonly closed = new AbortController();
   // Serializes snapshots and updates so reconnect cannot miss a transition.
   private readonly summaryQueue = new SerialQueue();
+  private readonly creationQueue = new SerialQueue();
   private readonly summaries = new Map<string, SessionSummary>();
   private readonly summaryChanges = new Stream<SessionSummariesUpdate>();
   private readonly summarySubscriptions = new Map<string, () => void>();
   private readonly productFieldsBySession = new Map<
     string,
-    SessionProductFields
+    ThreadProductFields
   >();
   private readonly pending = new Set<Promise<unknown>>();
-  private readonly sessions = new Map<string, HaloAgentSession>();
-  private readonly stored = new Map<string, Promise<SessionHandle | Error>>();
-  private readonly opening = new Map<
-    string,
-    Promise<Error | HaloAgentSession>
-  >();
-  private readonly repo: SessionRepoApi;
-  private readonly environment: HaloAgentSessionOptions["environment"];
-  private readonly llmApi: HaloAgentSessionOptions["llmApi"];
-  private readonly filesystem: HaloAgentSessionOptions["filesystem"];
-  private readonly layout: HaloAgentSessionOptions["layout"];
-  private readonly toolRuntime: HaloAgentSessionOptions["toolRuntime"];
+  private readonly sessions = new Map<string, Thread>();
+  private readonly stored = new Map<string, Promise<ThreadHandle | Error>>();
+  private readonly opening = new Map<string, Promise<Error | Thread>>();
+  private readonly repo: ThreadRepoApi;
+  private readonly environment: ThreadOptions["environment"];
+  private readonly llmApi: ThreadOptions["llmApi"];
+  private readonly filesystem: ThreadOptions["filesystem"];
+  private readonly layout: ThreadOptions["layout"];
+  private readonly toolRuntime: ThreadOptions["toolRuntime"];
 
-  constructor(ctx: SessionRegistryOptions) {
+  constructor(ctx: ThreadManagerOptions) {
     const { repo, environment, llmApi, filesystem, layout, toolRuntime } = ctx;
     this.repo = repo;
     this.environment = environment;
@@ -103,7 +106,7 @@ export class SessionRegistry {
       .catch((cause) => new ListAgentSessionsError({ cause }));
     if (metadata instanceof Error) return metadata;
     for (const item of metadata) {
-      const session = await this.open(item.id);
+      const session = await this.openSession(item.id);
       if (session instanceof Error) return session;
       session.resume();
     }
@@ -136,12 +139,113 @@ export class SessionRegistry {
     yield* updates;
   }
 
-  async create() {
-    return await this.track(async () => await this.createSession());
+  async new(input?: { requestId?: string }) {
+    return await this.track(
+      async () =>
+        await this.creationQueue.run(async () => {
+          // Deterministic, filesystem-safe identity makes creation retries survive restart.
+          const sessionId =
+            input?.requestId === undefined
+              ? undefined
+              : `thread-${createHash("sha256").update(input.requestId).digest("hex")}`;
+          if (sessionId !== undefined) {
+            const metadata = await this.repo
+              .list()
+              .catch((cause) => new ListAgentSessionsError({ cause }));
+            if (metadata instanceof Error) return metadata;
+            if (metadata.some((item) => item.id === sessionId)) {
+              const opened = await this.openSession(sessionId);
+              if (opened instanceof Error) return opened;
+              return { sessionId };
+            }
+          }
+          const thread = await this.createSession(sessionId);
+          if (thread instanceof Error) return thread;
+          return { sessionId: thread.sessionId };
+        }),
+    );
   }
 
-  async open(sessionId: string) {
-    return await this.track(async () => await this.openSession(sessionId));
+  private async withThread<T>(
+    sessionId: string,
+    operation: (thread: Thread) => Promise<T> | T,
+  ) {
+    return await this.track(async () => {
+      const thread = await this.openSession(sessionId);
+      if (thread instanceof Error) return thread;
+      return await operation(thread);
+    });
+  }
+
+  async prompt(input: ChatPrompt & { sessionId: string }) {
+    return await this.withThread(
+      input.sessionId,
+      async (thread) => await thread.prompt(input),
+    );
+  }
+
+  async wait(
+    input: { sessionId: string; submissionId: number },
+    signal?: AbortSignal,
+  ) {
+    const abortSignal =
+      signal === undefined
+        ? this.closed.signal
+        : AbortSignal.any([signal, this.closed.signal]);
+    return await this.withThread(
+      input.sessionId,
+      async (thread) => await thread.wait(input.submissionId, abortSignal),
+    );
+  }
+
+  async snapshot(sessionId: string, connections: HaloConnectionState[]) {
+    return await this.withThread(sessionId, (thread) =>
+      thread.readSnapshot(connections),
+    );
+  }
+
+  async events(
+    sessionId: string,
+    options: {
+      signal?: AbortSignal;
+      readConnections: () => HaloConnectionState[];
+    },
+  ) {
+    return await this.withThread(sessionId, (thread) => thread.watch(options));
+  }
+
+  async abort(sessionId: string) {
+    return await this.withThread(
+      sessionId,
+      async (thread) => await thread.abort(),
+    );
+  }
+
+  async setName(sessionId: string, name: string) {
+    return await this.withThread(
+      sessionId,
+      async (thread) => await thread.setName(name),
+    );
+  }
+
+  async appendMessages(sessionId: string, messages: readonly HaloMessage[]) {
+    return await this.withThread(
+      sessionId,
+      async (thread) => await thread.appendMessages(messages),
+    );
+  }
+
+  async notify(sessionId: string, input: Parameters<Thread["notify"]>[0]) {
+    return await this.withThread(
+      sessionId,
+      async (thread) => await thread.notify(input),
+    );
+  }
+
+  async publishConnectionEvent(sessionId: string, event: HaloConnectionEvent) {
+    return await this.withThread(sessionId, (thread) =>
+      thread.publishConnectionEvent(event),
+    );
   }
 
   async close(sessionId: string) {
@@ -162,7 +266,7 @@ export class SessionRegistry {
             return;
           const readReceiptCursorId = summary.latestResultId;
           const saved = await this.repo.setReadReceipt({
-            sessionId,
+            threadId: sessionId,
             readReceiptCursorId,
           });
           if (saved instanceof Error) return saved;
@@ -184,7 +288,7 @@ export class SessionRegistry {
           if (summary.latestResultId === undefined || isThreadUnread(summary))
             return;
           const saved = await this.repo.setReadReceipt({
-            sessionId,
+            threadId: sessionId,
           });
           if (saved instanceof Error) return saved;
           this.productFieldsBySession.set(sessionId, {
@@ -203,11 +307,11 @@ export class SessionRegistry {
           if (summary instanceof Error) return summary;
           if (summary.markedDone) return;
           const saved = await this.repo.setMarkedDone({
-            sessionId,
+            threadId: sessionId,
             markedDone: true,
           });
           if (saved instanceof Error) return saved;
-          const fields: SessionProductFields = { markedDone: true };
+          const fields: ThreadProductFields = { markedDone: true };
           fields.readReceiptCursorId = summary.readReceiptCursorId;
           this.productFieldsBySession.set(sessionId, fields);
           this.publish({ ...summary, markedDone: true });
@@ -223,11 +327,11 @@ export class SessionRegistry {
           if (summary instanceof Error) return summary;
           if (!summary.markedDone) return;
           const saved = await this.repo.setMarkedDone({
-            sessionId,
+            threadId: sessionId,
             markedDone: false,
           });
           if (saved instanceof Error) return saved;
-          const fields: SessionProductFields = { markedDone: false };
+          const fields: ThreadProductFields = { markedDone: false };
           fields.readReceiptCursorId = summary.readReceiptCursorId;
           this.productFieldsBySession.set(sessionId, fields);
           this.publish({ ...summary, markedDone: false });
@@ -236,7 +340,7 @@ export class SessionRegistry {
   }
 
   private async track<T>(operation: () => Promise<T>) {
-    if (this.closing) return new SessionRegistryClosedError();
+    if (this.closing) return new ThreadManagerClosedError();
     const pending = operation();
     this.pending.add(pending);
     using cleanup = new errore.DisposableStack();
@@ -307,9 +411,9 @@ export class SessionRegistry {
     return fields;
   }
 
-  private async createSession() {
+  private async createSession(sessionId?: string) {
     const stored = await this.repo
-      .create({})
+      .create({ id: sessionId })
       .catch((cause) => new CreateAgentSessionError({ cause }));
     if (stored instanceof Error) return stored;
     this.productFieldsBySession.set(stored.metadata.id, { markedDone: false });
@@ -374,7 +478,7 @@ export class SessionRegistry {
         ? await this.findStored(sessionId)
         : await existing;
     if (stored instanceof Error) return stored;
-    const session = await HaloAgentSession.attach(
+    const session = await Thread.attach(
       {
         environment: this.environment,
         llmApi: this.llmApi,
@@ -414,7 +518,7 @@ export class SessionRegistry {
     return await this.openStored(item);
   }
 
-  private async openStored(metadata: SessionMetadata) {
+  private async openStored(metadata: ThreadMetadata) {
     const existing = this.stored.get(metadata.id);
     if (existing !== undefined) return await existing;
     const opening = this.repo
@@ -428,7 +532,7 @@ export class SessionRegistry {
     return stored;
   }
 
-  private register(session: HaloAgentSession) {
+  private register(session: Thread) {
     this.sessions.set(session.sessionId, session);
     this.summarySubscriptions.set(
       session.sessionId,
@@ -474,7 +578,7 @@ function applyProductFields({
   fields,
 }: {
   summary: PiSessionSummary | SessionSummary;
-  fields: SessionProductFields;
+  fields: ThreadProductFields;
 }): SessionSummary {
   return { ...summary, ...fields };
 }

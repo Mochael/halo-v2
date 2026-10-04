@@ -7,6 +7,7 @@ import { migrateExecutorTenant } from "./migrateExecutorTenant.js";
 import { initialWorkspaceMigration } from "./migrations/20260921130000-initialWorkspace.js";
 import { initialExecutorMigration } from "./migrations/20260921133000-initialExecutorMigration.js";
 import { sessionStatusMigration } from "./migrations/20260921194000-sessionStatus.js";
+import { durableStorageMigration } from "./migrations/20261003100000-durableStorage.js";
 import { workspaceMigrations } from "./migrations/workspaceMigrations.js";
 
 type MigrationFixture = {
@@ -168,7 +169,13 @@ migrationTest(
 migrationTest(
   "drops obsolete session data while preserving unrelated workspace data",
   ({ migration }) => {
-    const legacyMigrations = workspaceMigrations.slice(0, -1);
+    const durableMigrationIndex = workspaceMigrations.indexOf(
+      durableStorageMigration,
+    );
+    const legacyMigrations = workspaceMigrations.slice(
+      0,
+      durableMigrationIndex,
+    );
     const legacy = migration.open(legacyMigrations);
     legacy.exec(`
       INSERT INTO halo_sessions (id, metadata, next_seq, stats, marked_done, read_receipt_cursor_id)
@@ -200,10 +207,10 @@ migrationTest(
         )
         .all(),
     ).toEqual([]);
-    expect(upgraded.prepare("SELECT * FROM halo_sessions").all()).toEqual([]);
+    expect(upgraded.prepare("SELECT * FROM halo_threads").all()).toEqual([]);
     expect(
       upgraded
-        .prepare("PRAGMA table_info(halo_sessions)")
+        .prepare("PRAGMA table_info(halo_threads)")
         .all()
         .map(
           (row) =>
@@ -214,17 +221,83 @@ migrationTest(
     expect(upgraded.prepare("SELECT * FROM user_hotkeys").all()).toEqual([
       { user_id: "user", hotkeys: '{"command":"Ctrl+K"}' },
     ]);
-    // Recovery can interrupt unfinished routines without opening discarded sessions.
+    // Recovery can interrupt unfinished routines without opening discarded threads.
     expect(
       upgraded
         .prepare(
-          "SELECT id, status, session_id IS NULL AS detached FROM halo_routine_runs ORDER BY id",
+          "SELECT id, status, thread_id IS NULL AS detached FROM halo_routine_runs ORDER BY id",
         )
         .all(),
     ).toEqual([
       { id: "completed", status: "completed", detached: 1 },
       { id: "running", status: "running", detached: 1 },
     ]);
+  },
+);
+
+migrationTest(
+  "creates thread storage with routine links and partition foreign keys",
+  ({ migration }) => {
+    const durable = migration.open(workspaceMigrations);
+    durable.exec(`
+      INSERT INTO halo_threads (id, metadata, marked_done, read_receipt_cursor_id)
+        VALUES ('thread-1', '{"id":"thread-1","createdAt":1}', 1, 'cursor');
+      INSERT INTO durable_metadata (thread_id, next_id, next_seq)
+        VALUES ('thread-1', '3', 2);
+      INSERT INTO record_ids (thread_id, id, record_type)
+        VALUES ('thread-1', 1, 'conversation');
+      INSERT INTO conversations (thread_id, id, record)
+        VALUES ('thread-1', 1, '{"id":1}');
+      INSERT INTO halo_routines (id, name, cron, timezone, action, enabled, created_at, updated_at, auto_archive_thread)
+        VALUES ('routine', 'Daily notes', '0 8 * * *', 'UTC', '{"type":"runAgent","prompt":"Summarize"}', 1, 1, 1, 1);
+      INSERT INTO halo_routine_runs (id, routine_id, trigger, scheduled_for, thread_id, status, started_at)
+        VALUES ('run', 'routine', 'manual', 1, 'thread-1', 'completed', 1);
+    `);
+    migration.close(durable);
+
+    const upgraded = migration.open(workspaceMigrations);
+    expect(upgraded.prepare("SELECT * FROM halo_threads").all()).toEqual([
+      {
+        id: "thread-1",
+        metadata: '{"id":"thread-1","createdAt":1}',
+        marked_done: 1,
+        read_receipt_cursor_id: "cursor",
+      },
+    ]);
+    expect(
+      upgraded
+        .prepare("SELECT thread_id, next_id, next_seq FROM durable_metadata")
+        .all(),
+    ).toEqual([{ thread_id: "thread-1", next_id: "3", next_seq: 2 }]);
+    expect(
+      upgraded.prepare("SELECT thread_id FROM halo_routine_runs").all(),
+    ).toEqual([{ thread_id: "thread-1" }]);
+    expect(
+      upgraded.prepare("SELECT auto_archive_thread FROM halo_routines").all(),
+    ).toEqual([{ auto_archive_thread: 1 }]);
+
+    const partitionTables = [
+      "durable_metadata",
+      "record_ids",
+      "conversations",
+      "entries",
+      "tasks",
+      "submissions",
+      "documents",
+      "document_revisions",
+    ];
+    for (const table of partitionTables) {
+      expect(
+        upgraded.prepare(`PRAGMA foreign_key_list(${table})`).all(),
+      ).toContainEqual(
+        expect.objectContaining({
+          table: "halo_threads",
+          from: "thread_id",
+          to: "id",
+          on_delete: "CASCADE",
+        }),
+      );
+    }
   },
 );
 

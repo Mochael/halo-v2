@@ -2468,7 +2468,7 @@ e2eTest(
         exact: true,
       }),
     ).toBeVisible();
-    expect(await app.server.rpc.sessions.list()).toHaveLength(1);
+    expect(await app.server.rpc.thread.list()).toHaveLength(1);
     const [hotkey] = await app.server.rpc.hotkeys.list();
     expect(hotkey?.action).toEqual({ type: "runAgent", prompt: instruction });
     await app.quit();
@@ -2604,7 +2604,7 @@ e2eTest(
         .getByText("Generate notes", { exact: true }),
     ).toBeVisible();
     await app.page.keyboard.press("Escape");
-    await app.page.route("**/rpc/sessions/create", async (route) => {
+    await app.page.route("**/rpc/thread/new", async (route) => {
       await route.fulfill({
         status: 400,
         contentType: "application/json",
@@ -2623,8 +2623,8 @@ e2eTest(
       app.page.getByRole("tab", { includeHidden: true }),
     ).toHaveCount(1);
     await app.page.keyboard.press("Escape");
-    await app.page.unroute("**/rpc/sessions/create");
-    await app.page.route("**/rpc/sessions/prompt", async (route) => {
+    await app.page.unroute("**/rpc/thread/new");
+    await app.page.route("**/rpc/thread/prompt", async (route) => {
       await route.fulfill({
         status: 400,
         contentType: "application/json",
@@ -2640,7 +2640,7 @@ e2eTest(
       "Could not run the hotkey",
     );
     await app.page.keyboard.press("Escape");
-    await app.page.unroute("**/rpc/sessions/prompt");
+    await app.page.unroute("**/rpc/thread/prompt");
     await app.pressShortcut({ key: "J", shift: true });
     await llm.respond(m.assistant("Your generated note."));
     await expect(
@@ -2742,7 +2742,7 @@ e2eTest(
     await expect(
       app.page.getByText("Halo disconnected from its server", { exact: true }),
     ).toHaveCount(0);
-    expect(await app.server.rpc.sessions.list()).toHaveLength(0);
+    expect(await app.server.rpc.thread.list()).toHaveLength(0);
   },
 );
 
@@ -3122,7 +3122,7 @@ e2eTest(
         app.page.getByText("Connection details", { exact: true }),
       ).toHaveCount(0);
     }
-    expect(await app.server.rpc.sessions.list()).toHaveLength(0);
+    expect(await app.server.rpc.thread.list()).toHaveLength(0);
   },
 );
 

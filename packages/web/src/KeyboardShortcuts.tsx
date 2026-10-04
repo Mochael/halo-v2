@@ -55,7 +55,7 @@ export function KeyboardShortcuts() {
       setOpen(false);
       setError(undefined);
       if (action.type === "runAgent") {
-        const created = await api.sessions.create().catch(
+        const created = await api.thread.new().catch(
           (cause) =>
             new HotkeyRunError({
               reason: cause instanceof Error ? cause.message : String(cause),
@@ -76,7 +76,7 @@ export function KeyboardShortcuts() {
           path: `/sessions/${created.sessionId}`,
           newTab: true,
         });
-        const prompted = await api.sessions
+        const prompted = await api.thread
           .prompt({
             sessionId: created.sessionId,
             text: action.prompt,

@@ -21,14 +21,14 @@ serverTest(
     const found = await server.rpc.testApi.invokeTool({
       path: "database.query",
       input: {
-        sql: "SELECT session_id AS sessionId, id, json_extract(record, '$.data.message.content') AS content FROM entries WHERE instr(record, ?) > 0",
+        sql: "SELECT thread_id AS threadId, id, json_extract(record, '$.data.message.content') AS content FROM entries WHERE instr(record, ?) > 0",
         parameters: ["America/Los_Angeles"],
       },
     });
     expect(found).toEqual({
       rows: [
         {
-          sessionId: saved.sessionId,
+          threadId: saved.sessionId,
           id: expect.any(Number),
           content: "Use America/Los_Angeles for routine reminders.",
         },
@@ -42,7 +42,7 @@ serverTest(
     });
     const latest = await server.rpc.testApi.invokeTool({
       path: "database.query",
-      input: { sql: "SELECT count(*) AS count FROM halo_sessions" },
+      input: { sql: "SELECT count(*) AS count FROM halo_threads" },
     });
     expect(latest).toEqual({ rows: [{ count: 2 }], truncated: false });
 
@@ -60,27 +60,27 @@ serverTest(
     await expect(
       server.rpc.testApi.invokeTool({
         path: "database.query",
-        input: { sql: "DELETE FROM halo_sessions" },
+        input: { sql: "DELETE FROM halo_threads" },
       }),
     ).rejects.toThrow("Tool runtime failed during tool invocation");
     await expect(
       server.rpc.testApi.invokeTool({
         path: "database.query",
         input: {
-          sql: "WITH doomed AS (SELECT id FROM halo_sessions) DELETE FROM halo_sessions",
+          sql: "WITH doomed AS (SELECT id FROM halo_threads) DELETE FROM halo_threads",
         },
       }),
     ).rejects.toThrow("Tool runtime failed during tool invocation");
     await expect(
       server.rpc.testApi.invokeTool({
         path: "database.query",
-        input: { sql: "SELECT 1; DELETE FROM halo_sessions" },
+        input: { sql: "SELECT 1; DELETE FROM halo_threads" },
       }),
     ).rejects.toThrow("Tool runtime failed during tool invocation");
     expect(
       await server.rpc.testApi.invokeTool({
         path: "database.query",
-        input: { sql: "SELECT count(*) AS count FROM halo_sessions" },
+        input: { sql: "SELECT count(*) AS count FROM halo_threads" },
       }),
     ).toEqual({ rows: [{ count: 3 }], truncated: false });
 
@@ -128,8 +128,8 @@ serverTest(
       content: "x".repeat(5 * 1024 * 1024 + 1),
     });
 
-    const session = await server.rpc.sessions.create();
-    const prompt = server.rpc.sessions.prompt({
+    const session = await server.rpc.thread.new();
+    const prompt = server.promptAndWait({
       ...session,
       text: "Find the silver marmot",
     });

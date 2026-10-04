@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { FilesystemService } from "../filesystem/FilesystemService.js";
 import { DatabaseClient } from "./DatabaseClient.js";
 import { piBackendTest } from "./fixtures.test.js";
-import { TursoSessionRepo } from "./TursoSessionRepo.js";
+import { TursoThreadRepo } from "./TursoThreadRepo.js";
 
 registerStorageConformance(
   { describe, expect, it },
@@ -27,7 +27,7 @@ registerStorageConformance(
     const filesystem = new FilesystemService();
     const database = await DatabaseClient.open({ directory, filesystem });
     if (database instanceof Error) throw database;
-    const repo = new TursoSessionRepo(database);
+    const repo = new TursoThreadRepo(database);
     const handle = await repo.create();
 
     await use(handle.storage);

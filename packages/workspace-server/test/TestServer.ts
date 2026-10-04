@@ -75,6 +75,15 @@ export class TestServer {
     return this.running.rendererRpc;
   }
 
+  async promptAndWait(...args: Parameters<HaloClient["thread"]["prompt"]>) {
+    const [input, options] = args;
+    const accepted = await this.rpc.thread.prompt(input, options);
+    return await this.rpc.thread.wait(
+      { sessionId: input.sessionId, submissionId: accepted.submissionId },
+      options,
+    );
+  }
+
   async start() {
     if (this.current !== undefined) {
       throw new Error(

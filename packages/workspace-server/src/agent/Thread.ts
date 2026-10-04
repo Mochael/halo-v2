@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { copyJson } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+  BACKGROUND_CONTEXT,
+  withAbortSignal,
+} from "@earendil-works/chord/context";
 import {
   Harness,
   createRegistry,
@@ -11,12 +14,18 @@ import {
   type Conversation,
   type ToolRegistration,
   type EntryDraft,
+  type CommitPublication,
+  type SubmissionId,
 } from "@earendil-works/pi-durable";
-import type { SessionHandle, SessionData } from "../storage/SessionRepoApi.js";
+import type { ThreadHandle, ThreadData } from "../storage/ThreadRepoApi.js";
 import type { LLMApi } from "../llm/LLMApi.js";
 import { createPiModelRuntime } from "../llm/createPiModelRuntime.js";
 import * as errore from "errore";
-import { Stream } from "@get-halo/shared/Stream";
+import {
+  Stream,
+  type ReadonlyStream,
+  type ReadonlyProjectedStream,
+} from "@get-halo/shared/Stream";
 import {
   type HaloMessage as StoredMessage,
   type SessionWatchItem,
@@ -26,6 +35,7 @@ import {
   type SessionSnapshot,
   type SessionSummary,
   chatPromptContent,
+  applySessionEvent,
 } from "@get-halo/client";
 import { prepareChatAttachments } from "./chatAttachments.js";
 import type { WorkspaceLayout } from "../workspace/WorkspaceService.js";
@@ -38,7 +48,7 @@ import { WorkspaceResourceLoader } from "./WorkspaceResourceLoader.js";
 import type { HaloEnvironment } from "./workspacePrompt.js";
 import { sessionEvents } from "./sessionEvents.js";
 import {
-  HaloSessionDoc,
+  HaloThreadDoc,
   SessionProjection,
   type MessagePresentation,
 } from "./SessionProjection.js";
@@ -68,7 +78,7 @@ type SessionNotification = {
   customType: "halo.integration.connected";
   content: string;
 };
-export type HaloAgentSessionOptions = {
+export type ThreadOptions = {
   environment: HaloEnvironment;
   llmApi: LLMApi;
   filesystem: FilesystemService;
@@ -76,9 +86,15 @@ export type HaloAgentSessionOptions = {
   toolRuntime: ToolRuntime;
 };
 
-export class HaloAgentSession {
-  // All consumers observe the same complete committed revision.
-  private snapshot: SessionSnapshot;
+type ThreadEvent =
+  | { type: "commit"; publication: CommitPublication }
+  | { type: "fault"; error: string }
+  | HaloConnectionEvent;
+
+export class Thread {
+  private readonly eventStream = new Stream<ThreadEvent>();
+  readonly events: ReadonlyStream<ThreadEvent> = this.eventStream;
+  readonly snapshot: ReadonlyProjectedStream<SessionSnapshot>;
   private readonly projection: SessionProjection;
   private readonly updates = new Stream<SessionWatchItem>();
   private readonly summaryChanges = new Stream<void>();
@@ -88,15 +104,15 @@ export class HaloAgentSession {
   readonly sessionId: string;
   private readonly harness: Harness;
   private readonly conversation: Conversation;
-  private readonly stored: SessionHandle;
+  private readonly stored: ThreadHandle;
   private readonly filesystem: FilesystemService;
   private readonly workspaceRoot: string;
 
   private constructor(ctx: {
     harness: Harness;
     conversation: Conversation;
-    stored: SessionHandle;
-    data: SessionData;
+    stored: ThreadHandle;
+    data: ThreadData;
     filesystem: FilesystemService;
     workspaceRoot: string;
   }) {
@@ -109,24 +125,35 @@ export class HaloAgentSession {
     this.filesystem = filesystem;
     this.workspaceRoot = workspaceRoot;
     this.projection = new SessionProjection(data);
-    this.snapshot = this.projection.snapshot();
-    // Installed while the bootstrap commit still owns the mutation line.
-    this.detach = harness.subscribeCommits((publication) => {
-      const previous = this.snapshot;
+    this.snapshot = this.events.project(
+      this.projection.snapshot(),
+      (previous, event) => {
+        if (event.type === "fault")
+          return { ...previous, activeRun: undefined, fault: event.error };
+        if (event.type === "halo.connection")
+          return applySessionEvent(previous, event);
+        this.projection.apply(event.publication);
+        return {
+          ...this.projection.snapshot(),
+          connections: previous.connections,
+        };
+      },
+    );
+    const publish = (event: ThreadEvent) => {
+      const previous = this.snapshot.latestValue;
       const summary = this.readSummary();
-      this.projection.apply(publication);
-      this.snapshot = this.projection.snapshot();
-      for (const event of sessionEvents(previous, this.snapshot))
-        this.updates.append({ type: "event", event });
+      this.eventStream.append(event);
+      for (const update of sessionEvents(previous, this.snapshot.latestValue))
+        this.updates.append({ type: "event", event: update });
       if (JSON.stringify(summary) !== JSON.stringify(this.readSummary()))
         this.summaryChanges.append();
-    });
+    };
+    // Installed while the bootstrap commit still owns the mutation line.
+    this.detach = harness.subscribeCommits((publication) =>
+      publish({ type: "commit", publication }),
+    );
     this.detachStorage = stored.fatalCommitErrors.subscribe((error) => {
-      this.snapshot = {
-        ...this.snapshot,
-        activeRun: undefined,
-        fault: error.message,
-      };
+      publish({ type: "fault", error: error.message });
       this.updates.append({
         type: "event",
         event: { type: "session.failed", error: error.message },
@@ -135,7 +162,7 @@ export class HaloAgentSession {
     });
   }
 
-  static async attach(options: HaloAgentSessionOptions, stored: SessionHandle) {
+  static async attach(options: ThreadOptions, stored: ThreadHandle) {
     await using cleanup = new errore.AsyncDisposableStack();
     cleanup.defer(async () => await stored.close());
     const { layout, toolRuntime: runtime, llmApi } = options;
@@ -203,7 +230,7 @@ export class HaloAgentSession {
     const conversation = await harness
       .root(BACKGROUND_CONTEXT, {
         init: async (tx, conversationId) => {
-          await tx.doc(HaloSessionDoc, conversationId);
+          await tx.doc(HaloThreadDoc, conversationId);
         },
       })
       .catch((cause) => new CreateAgentSessionError({ cause }));
@@ -221,7 +248,7 @@ export class HaloAgentSession {
     const session = await harness
       .commit(
         async () =>
-          new HaloAgentSession({
+          new Thread({
             harness,
             conversation,
             stored,
@@ -251,7 +278,7 @@ export class HaloAgentSession {
   }
 
   readSnapshot(connections: HaloConnectionState[]) {
-    return { ...this.snapshot, connections };
+    return { ...this.snapshot.latestValue, connections };
   }
 
   async *watch(options: {
@@ -272,6 +299,7 @@ export class HaloAgentSession {
   }
 
   publishConnectionEvent(event: HaloConnectionEvent) {
+    this.eventStream.append(event);
     this.updates.append({ type: "event", event });
   }
 
@@ -290,7 +318,7 @@ export class HaloAgentSession {
   async setName(name: string) {
     return await this.conversation
       .commit(async (tx) => {
-        (await tx.doc(HaloSessionDoc, this.conversation.id)).name = name;
+        (await tx.doc(HaloThreadDoc, this.conversation.id)).name = name;
       }, BACKGROUND_CONTEXT)
       .catch(
         (cause) =>
@@ -341,7 +369,7 @@ export class HaloAgentSession {
         : randomUUID();
     const saved = await this.conversation
       .commit(async (tx) => {
-        const state = await tx.doc(HaloSessionDoc, this.conversation.id);
+        const state = await tx.doc(HaloThreadDoc, this.conversation.id);
         if (message.role === "user") {
           const { content: _content, ...presentation } = message;
           // SAFETY: Removing undefined optional fields preserves the presentation shape and makes it valid Chord JSON.
@@ -379,16 +407,42 @@ export class HaloAgentSession {
         (cause) => new PromptFailedError({ reason: "Prompt failed", cause }),
       );
     if (submitted instanceof Error) return submitted;
+    return { submissionId: Number(submitted.id) };
+  }
+
+  async wait(submissionId: number, signal?: AbortSignal) {
+    const context = withAbortSignal(
+      signal === undefined
+        ? this.closed.signal
+        : AbortSignal.any([signal, this.closed.signal]),
+      BACKGROUND_CONTEXT,
+    );
+    if (!Number.isSafeInteger(submissionId) || submissionId < 1)
+      return new PromptFailedError({ reason: "Invalid submission ID" });
+    // SAFETY: The external ID is a positive safe integer; Pi checks its existence below.
+    const submitted = await this.harness
+      .submission(submissionId as SubmissionId, context)
+      .catch(
+        (cause) =>
+          new PromptFailedError({ reason: "Could not read submission", cause }),
+      );
+    if (submitted instanceof Error) return submitted;
+    if (submitted === undefined)
+      return new PromptFailedError({ reason: "Unknown thread submission" });
     const status = await submitted
-      .status(BACKGROUND_CONTEXT)
+      .status(context)
       .catch(
         (cause) =>
           new PromptFailedError({ reason: "Could not read submission", cause }),
       );
     if (status instanceof Error) return status;
-    if (status.status === "queued") return;
+    if (
+      status.conversationId !== this.conversation.id ||
+      status.type !== "input"
+    )
+      return new PromptFailedError({ reason: "Unknown thread submission" });
     const settled = await submitted
-      .wait(BACKGROUND_CONTEXT)
+      .wait(context)
       .catch(
         (cause) =>
           new PromptFailedError({ reason: "Prompt interrupted", cause }),
@@ -434,11 +488,12 @@ export class HaloAgentSession {
       );
     this.detach();
     this.detachStorage();
+    this.snapshot[Symbol.dispose]();
     if (closed instanceof Error) return closed;
   }
 
   readSummary(): Omit<SessionSummary, "markedDone" | "readReceiptCursorId"> {
-    const snapshot = this.snapshot;
+    const snapshot = this.snapshot.latestValue;
     const latest = snapshot.entries.at(-1);
     const timestamp =
       latest?.type === "message" ? latest.message.timestamp : latest?.timestamp;

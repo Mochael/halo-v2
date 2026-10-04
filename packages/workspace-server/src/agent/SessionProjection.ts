@@ -11,18 +11,18 @@ import {
   type HaloMessage,
   type SessionSnapshot,
 } from "@get-halo/client";
-import type { SessionData } from "../storage/SessionRepoApi.js";
+import type { ThreadData } from "../storage/ThreadRepoApi.js";
 import { sessionEntry, sessionSnapshot } from "./sessionEvents.js";
 
 export type MessagePresentation =
   | Omit<Extract<HaloMessage, { role: "user" }>, "content">
   | Omit<Extract<HaloMessage, { role: "custom" }>, "content" | "details">;
 
-export const HaloSessionDoc = defineDoc<{
+export const HaloThreadDoc = defineDoc<{
   name?: string;
   inputs: Record<string, JsonRepresentation<MessagePresentation>>;
 }>({
-  kind: "halo.session",
+  kind: "halo.thread",
   version: 1,
   scope: "conversation",
   history: "latest",
@@ -35,10 +35,10 @@ export class SessionProjection {
   private seq: number;
   private readonly entries = new Map<number, EntryRecord>();
   private readonly submissions = new Map<number, SubmissionRecord>();
-  private documents: SessionData["documents"];
+  private documents: ThreadData["documents"];
   private lastRun: SessionSnapshot["lastRun"];
 
-  constructor(data: SessionData) {
+  constructor(data: ThreadData) {
     this.seq = data.seq;
     for (const entry of data.entries) this.entries.set(entry.id, entry);
     for (const submission of data.submissions)
@@ -87,8 +87,8 @@ export class SessionProjection {
   }
 
   private get presentation() {
-    // SAFETY: HaloSessionDoc is the only writer of this application document.
-    return (this.documents["halo.session"] ?? { inputs: {} }) as {
+    // SAFETY: HaloThreadDoc is the only writer of this application document.
+    return (this.documents["halo.thread"] ?? { inputs: {} }) as {
       name?: string;
       inputs: Record<string, MessagePresentation>;
     };
