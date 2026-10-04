@@ -16,9 +16,6 @@ export default defineConfig({
       },
     },
   },
-  optimizeDeps: {
-    noDiscovery: true,
-  },
   resolve: {
     alias: {
       // Tandem Logger.ts imports node:fs at module load.
