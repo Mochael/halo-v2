@@ -25,6 +25,7 @@ export class TestServer {
   private readonly testApiEnabled: boolean;
   private readonly traceWorkspaceId: WorkspaceServerOptions["config"]["traceWorkspaceId"];
   private readonly traceUploader: WorkspaceServerOptions["host"]["traceUploader"];
+  private readonly gateway: WorkspaceServerOptions["config"]["gateway"];
 
   constructor(ctx: {
     artifacts: TestArtifacts;
@@ -33,6 +34,7 @@ export class TestServer {
     testApiEnabled?: boolean;
     traceUploader?: WorkspaceServerOptions["host"]["traceUploader"];
     traceWorkspaceId?: string;
+    gateway?: WorkspaceServerOptions["config"]["gateway"];
   }) {
     const {
       artifacts,
@@ -41,6 +43,7 @@ export class TestServer {
       testApiEnabled,
       traceUploader,
       traceWorkspaceId,
+      gateway,
     } = ctx;
     this.artifacts = artifacts;
     this.workspaceRoot = workspaceRoot;
@@ -48,6 +51,7 @@ export class TestServer {
     this.testApiEnabled = testApiEnabled === undefined ? false : testApiEnabled;
     this.traceUploader = traceUploader;
     this.traceWorkspaceId = traceWorkspaceId;
+    this.gateway = gateway;
   }
 
   get harness() {
@@ -89,6 +93,7 @@ export class TestServer {
         corsOrigins: [],
         testApiEnabled: this.testApiEnabled,
         traceWorkspaceId: this.traceWorkspaceId,
+        gateway: this.gateway,
         extensionRuntime: {
           executable: process.execPath,
           electronRunAsNode: false,

@@ -232,6 +232,7 @@ export function serveHaloHttp(options: {
     if (isExtensionProxyRequest(url)) {
       await serveExtensionRequest({
         extensions: options.context.extensions,
+        fromGateway: authorization === "gateway",
         request,
         response,
         url,
@@ -304,6 +305,7 @@ export function serveHaloHttp(options: {
     }
     await serveExtensionUpgrade({
       extensions: options.context.extensions,
+      fromGateway: authorization === "gateway",
       request,
       socket,
       head,

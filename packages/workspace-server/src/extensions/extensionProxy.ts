@@ -22,6 +22,7 @@ export function isExtensionProxyRequest(url: URL) {
 
 export async function serveExtensionRequest(ctx: {
   extensions: ExtensionHost;
+  fromGateway: boolean;
   request: IncomingMessage;
   response: ServerResponse;
   url: URL;
@@ -44,6 +45,7 @@ export async function serveExtensionRequest(ctx: {
 
 export async function serveExtensionUpgrade(ctx: {
   extensions: ExtensionHost;
+  fromGateway: boolean;
   request: IncomingMessage;
   socket: Duplex;
   head: Buffer;
@@ -62,7 +64,7 @@ export async function serveExtensionUpgrade(ctx: {
   }
 
   const target = new URL(`${route.path}${ctx.url.search}`, origin);
-  prepareRequest(ctx.request, target);
+  prepareRequest({ ...ctx, target });
   const proxied = await proxyUpgrade(
     target.origin,
     ctx.request,
@@ -99,11 +101,12 @@ function parseExtensionRoute(url: URL) {
 }
 
 async function forwardExtensionRequest(ctx: {
+  fromGateway: boolean;
   request: IncomingMessage;
   response: ServerResponse;
   target: URL;
 }) {
-  prepareRequest(ctx.request, ctx.target);
+  prepareRequest(ctx);
   const proxied = await extensionProxy
     .web(ctx.request, ctx.response, {
       target: ctx.target.origin,
@@ -117,9 +120,19 @@ async function forwardExtensionRequest(ctx: {
   if (!ctx.response.writableEnded) ctx.response.end();
 }
 
-function prepareRequest(request: IncomingMessage, target: URL) {
-  const publicHost = request.headers.host;
-  const forwardedProtocol = firstHeader(request.headers["x-forwarded-proto"]);
+function prepareRequest(ctx: {
+  request: IncomingMessage;
+  target: URL;
+  fromGateway: boolean;
+}) {
+  const { request, target, fromGateway } = ctx;
+  // Only the authenticated control plane can supply the public origin.
+  const publicHost = fromGateway
+    ? (firstHeader(request.headers["x-forwarded-host"]) ?? request.headers.host)
+    : request.headers.host;
+  const forwardedProtocol = fromGateway
+    ? firstHeader(request.headers["x-forwarded-proto"])
+    : undefined;
   removePrivateHeaders(request.headers);
   request.headers.host = target.host;
   request.headers["x-forwarded-host"] = publicHost;
@@ -134,6 +147,10 @@ function removePrivateHeaders(headers: IncomingHttpHeaders) {
   delete headers.forwarded;
   delete headers["x-forwarded-host"];
   delete headers["x-forwarded-proto"];
+  delete headers["x-exedev-authorization"];
+  delete headers["x-exedev-token-ctx"];
+  delete headers["x-exedev-userid"];
+  delete headers["x-exedev-email"];
 }
 
 function firstHeader(value: string | string[] | undefined) {

@@ -15,6 +15,7 @@ import {
   type SessionSummariesUpdate,
 } from "@get-halo/client";
 import fs from "node:fs/promises";
+import nodeHttp from "node:http";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { IdTokenClient } from "google-auth-library";
@@ -2352,6 +2353,123 @@ serverTest(
     await server.stop();
     await server.start();
     expect(await server.rpc.hotkeys.list()).toEqual([]);
+  },
+);
+
+serverTest(
+  "preserves the gateway public origin for extension HTTP and WebSocket requests",
+  async ({ createServer }) => {
+    const gatewayToken = "test-workspace-gateway-token-0123456789";
+    const server = createServer({ gateway: { token: gatewayToken } });
+    await server.start();
+    const directory = path.join(
+      server.workspaceRoot,
+      ".halo/extensions/origin-test",
+    );
+    const launcher = path.join(directory, "dist/start.mjs");
+    await fs.mkdir(path.dirname(launcher), { recursive: true });
+    await fs.writeFile(
+      path.join(directory, "package.json"),
+      JSON.stringify({ name: "origin-test" }),
+    );
+    // A real extension process serves HTTP and accepts WebSocket upgrades.
+    await fs.writeFile(
+      launcher,
+      `
+      import http from "node:http";
+      import crypto from "node:crypto";
+      const server = http.createServer((request, response) => {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify(request.headers));
+      });
+      server.on("upgrade", (request, socket) => {
+        const accept = crypto.createHash("sha1")
+          .update(request.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+          .digest("base64");
+        socket.end("HTTP/1.1 101 Switching Protocols\\r\\n" +
+          "Connection: Upgrade\\r\\nUpgrade: websocket\\r\\n" +
+          "Sec-WebSocket-Accept: " + accept + "\\r\\n" +
+          "X-Origin-Host: " + request.headers["x-forwarded-host"] + "\\r\\n" +
+          "X-Origin-Proto: " + request.headers["x-forwarded-proto"] + "\\r\\n\\r\\n");
+      });
+      server.listen(0, "127.0.0.1", () => {
+        process.send("http://127.0.0.1:" + server.address().port + "/view/");
+      });
+      process.on("message", (message) => {
+        if (message === "shutdown") server.close(() => process.exit(0));
+      });
+    `,
+    );
+    await server.rpc.extensions.reload();
+    const url = `${server.transport.origin}/extensions/origin-test/view/`;
+    const forwarded = {
+      host: "private-vm.exe.xyz:8788",
+      "x-forwarded-host": "halo.example:8443",
+      "x-forwarded-proto": "https",
+      cookie: "private-cookie",
+      "x-exedev-authorization": "Bearer private-provider-token",
+      "x-exedev-token-ctx": "private-token-context",
+      "x-exedev-userid": "private-user",
+      "x-exedev-email": "private@example.com",
+    };
+    const gatewayHeaders = {
+      ...forwarded,
+      authorization: `Bearer ${gatewayToken}`,
+    };
+    const response = await fetch(url, { headers: gatewayHeaders });
+    expect(response.status).toBe(200);
+    const received = await response.json();
+    expect(received).toMatchObject({
+      "x-forwarded-host": "halo.example:8443",
+      "x-forwarded-proto": "https",
+    });
+    for (const name of [
+      "authorization",
+      "cookie",
+      "x-exedev-authorization",
+      "x-exedev-token-ctx",
+      "x-exedev-userid",
+      "x-exedev-email",
+    ])
+      expect(received).not.toHaveProperty(name);
+
+    const upgrade = await new Promise<nodeHttp.IncomingMessage>(
+      (resolve, reject) => {
+        const request = nodeHttp.request(url, {
+          headers: {
+            ...gatewayHeaders,
+            connection: "Upgrade",
+            upgrade: "websocket",
+            "sec-websocket-version": "13",
+            "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+          },
+        });
+        request.on("upgrade", (upgraded, socket) => {
+          socket.destroy();
+          resolve(upgraded);
+        });
+        request.on("response", (rejected) => {
+          rejected.resume();
+          reject(new Error(`Upgrade rejected: ${rejected.statusCode}`));
+        });
+        request.on("error", reject);
+        request.end();
+      },
+    );
+    expect(upgrade.statusCode).toBe(101);
+    expect(upgrade.headers).toMatchObject({
+      "x-origin-host": "halo.example:8443",
+      "x-origin-proto": "https",
+    });
+
+    const direct = await fetch(url, {
+      headers: { ...forwarded, ...server.transport.headers },
+    });
+    expect(direct.status).toBe(200);
+    expect(await direct.json()).toMatchObject({
+      "x-forwarded-host": new URL(server.transport.origin).host,
+      "x-forwarded-proto": "http",
+    });
   },
 );
 

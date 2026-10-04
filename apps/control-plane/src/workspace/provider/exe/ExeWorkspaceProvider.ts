@@ -146,8 +146,8 @@ export class ExeWorkspaceProvider implements WorkspaceProviderApi {
       input,
       vmName,
       assignment,
-      attemptsRemaining:
-        existing === undefined || existing.status === "paused" ? 30 : 0,
+      // Another instance may have created this running VM before SSH is ready.
+      attemptsRemaining: 30,
     });
   }
 
