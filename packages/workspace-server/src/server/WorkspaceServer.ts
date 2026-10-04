@@ -13,6 +13,7 @@ import { FilesystemService } from "../filesystem/FilesystemService.js";
 import { ExtensionHost } from "../extensions/ExtensionHost.js";
 import type { ExtensionRuntime } from "../extensions/startExtension.js";
 import { ThreadManager } from "../sessions/ThreadManager.js";
+import { createThreadPlugin } from "../sessions/createThreadPlugin.js";
 import { WorkspaceService } from "../workspace/WorkspaceService.js";
 import { WorkspaceSearch } from "../workspace/WorkspaceSearch.js";
 import { StaticAgentAuthority } from "../agent/runtime/AgentAuthority.js";
@@ -249,6 +250,10 @@ export class WorkspaceServer {
           createWorkspaceFilesPlugin(filesystem),
           createDatabaseQueryPlugin(database),
           createHotkeysPlugin(hotkeys),
+          createThreadPlugin(() => ({
+            threads: sessions,
+            connections: connectionService,
+          })),
           workspaceBashPlugin,
           parallelSearchPlugin,
         ],
@@ -258,6 +263,8 @@ export class WorkspaceServer {
             "workspace.files.read",
             "workspace.files.write",
             "workspace.shell.execute",
+            "workspace.threads.read",
+            "workspace.threads.write",
             "network.web.search",
           ],
         ),
@@ -275,6 +282,8 @@ export class WorkspaceServer {
     if (initialized instanceof Error) return initialized;
     if (toolRuntime instanceof Error) return toolRuntime;
 
+    const connectionService = new ConnectionService(toolRuntime);
+    cleanup.defer(() => connectionService.close());
     const extensions = new ExtensionHost({
       workspaceRoot,
       toolsOrigin: http.origin,
@@ -319,8 +328,6 @@ export class WorkspaceServer {
       logger: host.logger,
     });
     cleanup.defer(async () => await routineScheduler.stop());
-    const connectionService = new ConnectionService(toolRuntime);
-    cleanup.defer(() => connectionService.close());
     const requests = serveHaloHttp({
       ...http,
       context: {

@@ -1281,6 +1281,205 @@ serverTest(
   },
 );
 
+serverTest(
+  "accesses unrelated workspace threads through exec",
+  async ({ server, llm }) => {
+    const unrelated = await server.rpc.testApi.seedSession({
+      title: "Shared report",
+      messages: [
+        { role: "user", content: "cobalt ibis", timestamp: Date.now() },
+      ],
+    });
+    const caller = await server.rpc.thread.new();
+    const prompt = server.promptAndWait({
+      ...caller,
+      text: "Inspect workspace threads",
+    });
+    await llm.respond(
+      m.tool.start("exec", {
+        id: "threads",
+        arguments: {
+          js: `
+      const created = await tools.thread.new({requestId: "independent-thread"});
+      const retry = await tools.thread.new({requestId: "independent-thread"});
+      const listed = await tools.thread.list({});
+      const snapshot = await tools.thread.snapshot({threadId: ${JSON.stringify(unrelated.sessionId)}});
+      return {created, retry, listed, snapshot};
+    `,
+        },
+      }),
+    );
+    await llm.respond(({ messages }) => {
+      const output = JSON.parse(
+        messageText(
+          messages.find(
+            (message) =>
+              message.role === "tool" && message.tool_call_id === "threads",
+          )!,
+        ),
+      );
+      expect(output.created).toMatchObject({
+        ok: true,
+        data: { threadId: expect.any(String) },
+      });
+      expect(output.retry).toEqual(output.created);
+      expect(output.listed).toMatchObject({
+        ok: true,
+        data: expect.arrayContaining([
+          expect.objectContaining({ threadId: unrelated.sessionId }),
+        ]),
+      });
+      expect(output.snapshot.ok).toBe(true);
+      expect(JSON.stringify(output.snapshot.data)).toContain("cobalt ibis");
+      return m.assistant("Read the independent conversation.");
+    });
+    await prompt;
+  },
+);
+
+serverTest(
+  "thread tools preserve durable submissions, bounded waits, and explicit abort",
+  async ({ server, llm }) => {
+    const target = await server.rpc.thread.new();
+    const input = {
+      threadId: target.sessionId,
+      requestId: "shared-message",
+      text: "Answer the report",
+    };
+    const accepted = await server.rpc.testApi.invokeTool({
+      path: "thread.prompt",
+      input,
+    });
+    expect(accepted).toMatchObject({ submissionId: expect.any(Number) });
+    expect(
+      await server.rpc.testApi.invokeTool({ path: "thread.prompt", input }),
+    ).toEqual(accepted);
+    // SAFETY: The public tool response was checked for a numeric submissionId above.
+    const waiting = {
+      threadId: target.sessionId,
+      ...(accepted as { submissionId: number }),
+    };
+    await llm.waitForRequest();
+    expect(
+      await server.rpc.testApi.invokeTool({
+        path: "thread.wait",
+        input: { ...waiting, timeoutMs: 10 },
+      }),
+    ).toEqual({ status: "pending" });
+    expect(
+      (await server.rpc.thread.list()).find(
+        (thread) => thread.sessionId === target.sessionId,
+      )?.isRunning,
+    ).toBe(true);
+    await expect(
+      server.rpc.testApi.invokeTool(
+        {
+          path: "thread.wait",
+          input: { ...waiting, timeoutMs: 30_000 },
+        },
+        { signal: AbortSignal.timeout(100) },
+      ),
+    ).rejects.toThrow();
+    await llm.respond(m.assistant("The shared report is ready."));
+    expect(
+      await server.rpc.testApi.invokeTool({
+        path: "thread.wait",
+        input: waiting,
+      }),
+    ).toMatchObject({ status: "completed" });
+    await server.stop();
+    await server.start();
+    expect(
+      await server.rpc.testApi.invokeTool({ path: "thread.prompt", input }),
+    ).toEqual(accepted);
+    expect(
+      await server.rpc.testApi.invokeTool({
+        path: "thread.wait",
+        input: waiting,
+      }),
+    ).toMatchObject({ status: "completed" });
+    await expect(
+      server.rpc.testApi.invokeTool({
+        path: "thread.wait",
+        input: { ...waiting, submissionId: 999999 },
+      }),
+    ).rejects.toThrow("Unknown thread submission");
+    const next = await server.rpc.testApi.invokeTool({
+      path: "thread.prompt",
+      input: { ...input, requestId: "abort-message", text: "More work" },
+    });
+    expect(next).toMatchObject({ submissionId: expect.any(Number) });
+    await llm.waitForRequest();
+    await server.rpc.testApi.invokeTool({
+      path: "thread.abort",
+      input: { threadId: target.sessionId },
+    });
+    expect(
+      await server.rpc.testApi.invokeTool({
+        path: "thread.wait",
+        input: {
+          threadId: target.sessionId,
+          // SAFETY: The prompt response was checked for a numeric submissionId above.
+          ...(next as { submissionId: number }),
+        },
+      }),
+    ).toMatchObject({ status: "aborted" });
+    expect(
+      sessionMessages(await server.rpc.thread.snapshot(target)).filter(
+        (message) => message.role === "user",
+      ),
+    ).toHaveLength(2);
+  },
+);
+
+serverTest(
+  "thread tools enforce workspace grants without ownership rules",
+  async ({ createServer }) => {
+    const server = createServer({ agentCapabilities: [] });
+    await server.start();
+    const target = await server.rpc.thread.new();
+    for (const operation of [
+      { name: "list", input: {}, capability: "read" },
+      {
+        name: "snapshot",
+        input: { threadId: target.sessionId },
+        capability: "read",
+      },
+      {
+        name: "wait",
+        input: { threadId: target.sessionId, submissionId: 1 },
+        capability: "read",
+      },
+      { name: "new", input: { requestId: "denied" }, capability: "write" },
+      {
+        name: "prompt",
+        input: {
+          threadId: target.sessionId,
+          requestId: "denied",
+          text: "Do not run",
+        },
+        capability: "write",
+      },
+      {
+        name: "abort",
+        input: { threadId: target.sessionId },
+        capability: "write",
+      },
+    ]) {
+      await expect(
+        server.rpc.testApi.invokeTool({
+          path: `thread.${operation.name}`,
+          input: operation.input,
+        }),
+      ).rejects.toThrow(`workspace.threads.${operation.capability}`);
+    }
+    expect(await server.rpc.thread.list()).toHaveLength(1);
+    expect(sessionMessages(await server.rpc.thread.snapshot(target))).toEqual(
+      [],
+    );
+  },
+);
+
 serverTest("reads files prepared by the tool fixture", async ({ server }) => {
   await server.rpc.testApi.invokeTool({
     path: "files.write",
@@ -2783,8 +2982,18 @@ serverTest(
       `
       import http from "node:http";
       import crypto from "node:crypto";
-      const server = http.createServer((request, response) => {
+      const server = http.createServer(async (request, response) => {
         response.setHeader("content-type", "application/json");
+        if (request.url.endsWith("/threads")) {
+          const result = await fetch(process.env.HALO_EXTENSION_TOOLS_ORIGIN + "/extension-tools/invoke", {
+            method: "POST",
+            headers: { "content-type": "application/json", authorization: "Bearer " + process.env.HALO_EXTENSION_TOOLS_TOKEN },
+            body: JSON.stringify({ json: { path: "thread.list", input: {} } }),
+          });
+          response.writeHead(result.status);
+          response.end(await result.text());
+          return;
+        }
         response.end(JSON.stringify(request.headers));
       });
       server.on("upgrade", (request, socket) => {
@@ -2824,6 +3033,19 @@ serverTest(
       ...forwarded,
       authorization: `Bearer ${gatewayToken}`,
     };
+    const independent = await server.rpc.thread.new();
+    const threadsResponse = await fetch(`${url}threads`, {
+      headers: gatewayHeaders,
+    });
+    expect(threadsResponse.status).toBe(200);
+    expect(await threadsResponse.json()).toMatchObject({
+      json: {
+        ok: true,
+        data: expect.arrayContaining([
+          expect.objectContaining({ threadId: independent.sessionId }),
+        ]),
+      },
+    });
     const response = await fetch(url, { headers: gatewayHeaders });
     expect(response.status).toBe(200);
     const received = await response.json();

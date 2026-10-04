@@ -1,6 +1,6 @@
 # Pi Durable threads: implementation and remaining plan
 
-This is the living plan for Halo's thread runtime. **Phase 1 landed in PR #358. Phases 2–4 are committed locally, not pushed. Phase 5 is implemented and verified locally, not committed.** Phase 6 remains planned. Pseudocode describes ownership and ordering, not exact Pi method signatures.
+This is the living plan for Halo's thread runtime. **Phase 1 landed in PR #358. Phases 2–6 are implemented on this branch for review; they are not merged or deployed.** Pseudocode describes ownership and ordering, not exact Pi method signatures. Per-phase verification below records the state when each phase was completed; the latest combined checks are in phase 6.
 
 ## System flow
 
@@ -66,7 +66,7 @@ Keep one durable identity per conversation. `Thread` is its loaded runtime, not 
 - Abort, archive, unload, and delete are different operations. Deletion is not part of this plan.
 - UI, routines, CLI, and agent tools use the same application operations.
 - Direct file tools and `exec` share authorized operations; direct tools need not generate JavaScript.
-- Child agents inherit no more authority than their caller. Once created, children are independent; parent cancellation stops waiting, not child execution.
+- Threads are independent workspace resources. Agents and extensions can access any workspace thread; there is no parent/child ownership or permission inheritance. Cancelling a wait does not stop the target thread.
 - No legacy session compatibility or automatic Pi traces. Explicit trace APIs are retained in phase 1.
 
 ## Goals and non-goals
@@ -516,7 +516,7 @@ Before this phase, direct tools and tools called through `exec` used separate wr
 
 **Proposed**
 
-Send both forms through `ToolRuntime.invoke`, using the registered operation's capability requirements and implementation. Direct tools keep their existing model-facing schemas and formatting; `exec` adds JavaScript composition around the same operations. This is implemented and verified locally, not committed.
+Send both forms through `ToolRuntime.invoke`, using the registered operation's capability requirements and implementation. Direct tools keep their existing model-facing schemas and formatting; `exec` adds JavaScript composition around the same operations. This phase is committed locally.
 
 ```mermaid
 flowchart LR
@@ -558,7 +558,7 @@ toolRuntime.invoke(operation, args, caller):
   return definition.execute(args, { workspaceRoot, userId, runtime, ...caller })
 ```
 
-The runtime is workspace-owned; each thread registers a Pi-facing adapter list against it. `HaloToolContext` is trusted host metadata, not model arguments: workspace, user, model, thread identity, root Pi tool-call correlation, cancellation, and the runtime. Executor carries the invocation metadata through `AsyncLocalStorage`. Nested progress retains its own generated invocation IDs. Capability grants remain workspace-wide and can be restricted by the host; per-child restrictions belong to phase 6.
+The runtime is workspace-owned; each thread registers a Pi-facing adapter list against it. `HaloToolContext` is trusted host metadata, not model arguments: workspace, user, model, thread identity, root Pi tool-call correlation, cancellation, and the runtime. Executor carries the invocation metadata through `AsyncLocalStorage`. Nested progress retains its own generated invocation IDs. Capability grants remain workspace-wide and can be restricted by the host; they are not inherited through thread creation.
 
 The registered files plugin now includes `viewImage`, so direct image viewing also follows this path. Direct Bash still keeps 8k leading and 32k trailing characters in a thread-specific output file; Executor Bash keeps 4k + 16k under `integrations`. The host-only `bashOutput` context option preserves that existing distinction. It is shell-specific policy in the shared context, not a Pi requirement or a model-controlled argument.
 
@@ -608,56 +608,82 @@ diff --git a/packages/workspace-server/src/agent/runtime/ToolRuntime.ts b/packag
    });
 ```
 
-## Phase 6 — Agents can start and message agents: planned
+## ✅ Phase 6 — Workspace-wide thread tools: implemented locally
 
 **Today**
 
-Humans and routines can create and prompt threads through the manager. Agents do not yet have authorized thread-management operations inside `exec`.
+Before this phase, humans and routines could create and prompt threads through the manager. Agents and extensions could not invoke those operations through the shared tool bridge.
 
 **Proposed**
 
-Expose those same manager operations as tools, so an agent can start a child conversation, send messages, and wait for results. The host supplies the caller identity and permissions; creating a child must not give it more access than its parent.
+Expose list, new, snapshot, prompt, wait, and abort through the existing tool runtime. Every workspace thread is accessible regardless of who created it. No parent/child relationship, inherited permission, or cascading cancellation is introduced. Streaming events remain available through the existing RPC API; Executor calls return finite results.
 
 ```mermaid
 flowchart TD
-    Parent[Parent agent: exec] --> Plugin[Thread tools in Executor]
-    Plugin --> Auth[ToolRuntime checks trusted caller]
+    Agent[Agent exec] --> Plugin[Thread tools in Executor]
+    Extension[Extension tools bridge] --> Plugin
+    Plugin --> Auth[ToolRuntime checks workspace grants]
     Auth --> Manager[ThreadManager]
-    Manager --> Child[Independent child thread]
-    Child --> Storage[Durable admission and results]
-    Storage --> Wait[Parent waits for a submission]
-    Cancel[Parent cancels its wait] --> Detach[Detach waiter only]
-    Detach -.-> Continues[Child continues running]
+    RPC[UI and streaming RPC] --> Manager
+    Manager --> Thread[Any workspace thread]
+    Thread --> Storage[Durable admission and status]
+    Storage --> Wait[Wait for one submission]
+    Cancel[Timeout or caller cancellation] --> Detach[Detach waiter only]
+    Detach -.-> Continues[Target continues running]
 ```
 
 ```callstack
- agent exec
- └── Executor plugin
-+    └── ToolRuntime authorization
-+        └── ThreadManager.new / prompt / wait / events / abort
+ agent exec / extension tools
+-└── No thread operations registered
++└── ToolRuntime.invoke
++    └── createThreadPlugin [[phase6-registration:new:250-259]]
++        └── ThreadManager.list / new / snapshot / prompt / wait / abort
+```
+
+```source-diff:phase6-registration:packages/workspace-server/src/server/WorkspaceServer.ts
+diff --git a/packages/workspace-server/src/server/WorkspaceServer.ts b/packages/workspace-server/src/server/WorkspaceServer.ts
+--- a/packages/workspace-server/src/server/WorkspaceServer.ts
++++ b/packages/workspace-server/src/server/WorkspaceServer.ts
+@@ -249,6 +250,10 @@ export class WorkspaceServer {
+           createWorkspaceFilesPlugin(filesystem),
+           createDatabaseQueryPlugin(database),
+           createHotkeysPlugin(hotkeys),
++          createThreadPlugin(() => ({
++            threads: sessions,
++            connections: connectionService,
++          })),
+           workspaceBashPlugin,
+           parallelSearchPlugin,
+         ],
 ```
 
 ```ts
-// Agent-authored code; caller identity is injected, never trusted from args.
-child = await tools.thread.new({ requestId: stableCreationId })
+// Executor results use its existing ok/data/error envelope.
+created = await tools.thread.new({ requestId: uniqueCreationId })
+if (!created.ok): return created
 accepted = await tools.thread.prompt({
-  sessionId: child.sessionId,
-  clientMessageId: stableMessageId,
+  threadId: created.data.threadId,
+  requestId: uniqueMessageId,
   text: "Investigate the report",
 })
-result = await tools.thread.wait({ ...child, ...accepted })
-
-// Host side
-newChild(input, caller):
-  authorize(caller, "threads.create")
-  permissions = noBroaderThan(caller.permissions)
-  return manager.newIdempotently(input.requestId, permissions)
+if (!accepted.ok): return accepted
+status = await tools.thread.wait({
+  threadId: created.data.threadId,
+  submissionId: accepted.data.submissionId,
+  timeoutMs: 1000,
+})
+// Repeat wait after pending. Snapshot is the whole conversation, not a submission result.
+snapshot = await tools.thread.snapshot({ threadId: created.data.threadId })
 ```
 
-Use trusted per-call context and register the plugin at server composition; do not give models control over caller identity. Authorization applies to reading and controlling other conversations as well as creation. The pseudocode illustrates wrapping phase 2's admission/wait operations; the exact tool schemas and result envelope remain to be chosen.
+`workspace.threads.read` authorizes list, snapshot, and wait. `workspace.threads.write` authorizes new, prompt, and abort. Both are included in standard workspace grants. The host registers a lazy service accessor because threads depend on the same runtime that exposes their tools; all services are constructed before thread recovery starts.
 
-Stable request IDs prevent retries from creating duplicate children or messages. Once created, a child runs independently: cancelling its parent's wait does not abort it. Verify creation, messaging, access denial, cancellation, and restart through actual tool calls, without introducing a second agent service.
+Tool payloads use `threadId`; existing RPC DTOs retain `sessionId`. Request IDs reuse the manager's existing semantics: creation keys are workspace-wide, prompt keys are target-thread-wide, and retries return the original identity. Callers must not reuse a key for a different operation. New threads load workspace instructions, not the creator's transcript. A prompt returns immediately after durable acceptance; busy-thread prompts steer the current run. Wait returns completed, aborted, failed, or pending after a bounded timeout (default 1 second, maximum 30 seconds). Its status belongs to the specific submission; content comes from the separate current snapshot. Abort is conversation-wide, not submission-specific.
+
+Combined verification: affected checks passed all 52 tasks; the full workspace-server suite passed all 127 E2Es. Coverage includes unrelated-thread access through actual `exec`, authenticated extension-process access, duplicate requests across restart, timeout and cancelled waiters leaving the target running, explicit abort, and denied workspace grants. The Electron package built successfully. The packaged conversation/routine/extension-authoring run passed 32 of 35 tests. The invalid-PDF wording failure and unread-session 30-second timeout reproduced on current `origin/main` in a separate clean worktree. The draft-restoration timeout passed an isolated retry on both this branch and `origin/main`; the original combined UI run is not fully green. Initial UI startup attempts without a usable X display were superseded by the authenticated Xvfb run.
+
+In the live Electron app, real cloud inference called thread.new → prompt → wait → snapshot and reported the other thread's exact reply, `copper kestrel`. The model initially omitted submissionId from wait, received the schema error, and successfully retried with the accepted ID. No parent/child metadata or access restriction was used.
 
 ## Delivery boundaries
 
-PR #358 landed phase 1. Phases 2–4 are committed locally, not pushed. Phase 5 is implemented locally and remains uncommitted. A ✅ marks implementation completion, not deployment or a fully green test suite; the verification limitations above still apply. For completed phases, **Today** describes the starting point before that phase and **Proposed** describes the implemented change. Phase 6 remains planned. No phase requires a new compatibility layer.
+PR #358 landed phase 1. This branch contains phases 2–6 for review against main. A ✅ marks implementation completion, not deployment or a fully green test suite; the verification limitations above still apply. For completed phases, **Today** describes the starting point before that phase and **Proposed** describes the implemented change. No phase requires a new compatibility layer.
