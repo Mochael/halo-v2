@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { Editor, Extensions } from "@tiptap/core";
+import Link from "@tiptap/extension-link";
 import { Markdown } from "@tiptap/markdown";
 import Placeholder from "@tiptap/extension-placeholder";
 import Paragraph from "@tiptap/extension-paragraph";
@@ -68,13 +69,16 @@ export function useMarkdownEditor({
       StarterKit.configure({
         paragraph: false,
         heading: { levels: [1, 2, 3, 4] },
-        link: {
-          openOnClick: false,
-        },
+        link: false,
         code: {
           HTMLAttributes: { class: inlineCodeClassName },
         },
       }),
+      Link.extend({
+        // Tiptap makes autolinks inclusive, which keeps typing at the end of a
+        // pasted URL inside the link.
+        inclusive: false,
+      }).configure({ openOnClick: false }),
       Markdown,
       MarkdownParagraph,
       ...extensions,
