@@ -157,7 +157,7 @@ e2eTest(
       path: testInfo.outputPath("attachments-ready.png"),
     });
     const uploads: Route[] = [];
-    await app.page.route("**/rpc/sessions/prompt", (route) => {
+    await app.page.route("**/rpc/thread/prompt", (route) => {
       uploads.push(route);
     });
     await pane.getByRole("button", { name: "Send", exact: true }).click();
@@ -168,7 +168,7 @@ e2eTest(
     await expect(pane.getByRole("status")).toHaveText("Preparing attachments…");
     await expect(attachments.getByRole("listitem")).toHaveCount(3);
     await uploads[0]!.continue();
-    await app.page.unroute("**/rpc/sessions/prompt");
+    await app.page.unroute("**/rpc/thread/prompt");
     await llm.respond(({ messages }) => {
       const user = messages.findLast((message) => message.role === "user");
       expect(user).toBeDefined();
@@ -456,7 +456,7 @@ e2eTest(
       .getByRole("button", { name: "New session", exact: true })
       .click();
     const subscriptions: Route[] = [];
-    await app.page.route("**/rpc/sessions/watch", async (route) => {
+    await app.page.route("**/rpc/thread/events", async (route) => {
       subscriptions.push(route);
       if (subscriptions.length === 2) return;
       await route.continue();
@@ -903,7 +903,7 @@ e2eTest(
     await expect(app.page.getByRole("tab", { selected: true })).toHaveText(
       "Keep my original question",
     );
-    const [session] = await app.server.rpc.sessions.list();
+    const [session] = await app.server.rpc.thread.list();
     expect(session).toBeDefined();
     const observedTitles = await observed.evaluate(({ titles, observer }) => {
       observer.disconnect();
@@ -1581,7 +1581,7 @@ e2eTest(
   "shows running sessions and keeps completed results unread until opened",
   async ({ app, llm }) => {
     const listRequests: string[] = [];
-    await app.page.route("**/rpc/sessions/list", async (route) => {
+    await app.page.route("**/rpc/thread/list", async (route) => {
       listRequests.push(route.request().url());
       await route.abort();
     });
@@ -1646,11 +1646,11 @@ e2eTest(
     await expect(sessionLink).toBeVisible();
     await expect(unread).toBeVisible();
     const pendingWatches: Route[] = [];
-    await app.page.route("**/rpc/sessions/watch", (route) => {
+    await app.page.route("**/rpc/thread/events", (route) => {
       pendingWatches.push(route);
     });
     let readAttempts = 0;
-    await app.page.route("**/rpc/sessions/markRead", async (route) => {
+    await app.page.route("**/rpc/thread/markRead", async (route) => {
       readAttempts++;
       if (readAttempts === 1) {
         await route.abort();
@@ -1664,13 +1664,13 @@ e2eTest(
     await app.page.waitForTimeout(300);
     await expect(unread).toBeVisible();
     await pendingWatches[0]!.continue();
-    await app.page.unroute("**/rpc/sessions/watch");
+    await app.page.unroute("**/rpc/thread/events");
     await expect(app.page.getByRole("log")).toContainText(
       "The report is ready.",
     );
     await expect(unread).not.toBeVisible();
     expect(readAttempts).toBe(2);
-    await app.page.unroute("**/rpc/sessions/markRead");
+    await app.page.unroute("**/rpc/thread/markRead");
     await app.page.reload();
     await expect(sessionLink).toBeVisible();
     await expect(unread).not.toBeVisible();

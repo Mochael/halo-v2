@@ -10,6 +10,7 @@ import type { WorkspaceServerOptions } from "@get-halo/workspace-server";
 vi.setConfig({ testTimeout: 20_000 });
 
 type ServerOptions = {
+  agentCapabilities?: WorkspaceServerOptions["host"]["agentCapabilities"];
   gateway?: WorkspaceServerOptions["config"]["gateway"];
   workspaceRoot?: string;
   testApiEnabled?: boolean;
@@ -55,6 +56,7 @@ export const serverTest = baseTest.extend<{
         gateway: options.gateway,
         artifacts,
         llmApi: createOpenAILLMApi(llm.configuration),
+        agentCapabilities: options.agentCapabilities,
         traceUploader: options.traceUploader,
         traceWorkspaceId: options.traceWorkspaceId,
         workspaceRoot:

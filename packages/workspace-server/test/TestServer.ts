@@ -22,6 +22,7 @@ export class TestServer {
   readonly workspaceRoot: string;
   private readonly artifacts: TestArtifacts;
   private readonly llmApi: WorkspaceServerOptions["host"]["llmApi"];
+  private readonly agentCapabilities: WorkspaceServerOptions["host"]["agentCapabilities"];
   private readonly testApiEnabled: boolean;
   private readonly traceWorkspaceId: WorkspaceServerOptions["config"]["traceWorkspaceId"];
   private readonly traceUploader: WorkspaceServerOptions["host"]["traceUploader"];
@@ -31,6 +32,7 @@ export class TestServer {
     artifacts: TestArtifacts;
     workspaceRoot: string;
     llmApi: WorkspaceServerOptions["host"]["llmApi"];
+    agentCapabilities?: WorkspaceServerOptions["host"]["agentCapabilities"];
     testApiEnabled?: boolean;
     traceUploader?: WorkspaceServerOptions["host"]["traceUploader"];
     traceWorkspaceId?: string;
@@ -48,6 +50,7 @@ export class TestServer {
     this.artifacts = artifacts;
     this.workspaceRoot = workspaceRoot;
     this.llmApi = llmApi;
+    this.agentCapabilities = ctx.agentCapabilities;
     this.testApiEnabled = testApiEnabled === undefined ? false : testApiEnabled;
     this.traceUploader = traceUploader;
     this.traceWorkspaceId = traceWorkspaceId;
@@ -73,6 +76,15 @@ export class TestServer {
 
   get rendererRpc() {
     return this.running.rendererRpc;
+  }
+
+  async promptAndWait(...args: Parameters<HaloClient["thread"]["prompt"]>) {
+    const [input, options] = args;
+    const accepted = await this.rpc.thread.prompt(input, options);
+    return await this.rpc.thread.wait(
+      { sessionId: input.sessionId, submissionId: accepted.submissionId },
+      options,
+    );
   }
 
   async start() {
@@ -101,6 +113,7 @@ export class TestServer {
       },
       host: {
         llmApi: this.llmApi,
+        agentCapabilities: this.agentCapabilities,
         traceUploader: this.traceUploader,
         logger: this.artifacts.logger,
         createCredentialVault: ({ filesystem, workspaceRoot }) =>

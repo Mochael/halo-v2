@@ -47,7 +47,7 @@ import {
   Tenant,
   tool,
   ToolAddress,
-  type ToolResult,
+  ToolResult,
   isToolResult,
 } from "@executor-js/sdk/core";
 import quickJsVariant from "@jitl/quickjs-singlefile-cjs-release-sync";
@@ -68,6 +68,7 @@ import type { DatabaseClient } from "../../storage/DatabaseClient.js";
 import type {
   HaloTool,
   HaloToolContext,
+  HaloToolExecution,
   HaloToolPlugin,
 } from "../tools/HaloToolPlugin.js";
 import type { AgentAuthority } from "./AgentAuthority.js";
@@ -107,9 +108,7 @@ export class ConnectionRequiredError extends errore.createTaggedError({
 
 type HaloToolsPluginOptions = {
   plugins: readonly HaloToolPlugin[];
-  authority: AgentAuthority;
   executionContext: AsyncLocalStorage<ToolExecutionContext>;
-  context: Pick<HaloToolContext, "workspaceRoot" | "userId">;
 };
 
 const showConnectionCardInputSchema = Type.Object({
@@ -137,7 +136,7 @@ type ExecActivityUpdate =
 
 type ToolExecutionContext = Pick<
   HaloToolContext,
-  "signal" | "modelId" | "runtime"
+  "signal" | "modelId" | "runtime" | "threadId"
 > & {
   parentToolCallId?: string;
   onToolEvent?: (event: ExecActivityUpdate) => void;
@@ -178,9 +177,7 @@ const haloToolsPlugin = definePlugin((options?: HaloToolsPluginOptions) => {
           toExecutorTool({
             pluginId: plugin.id,
             haloTool,
-            authority: options.authority,
             executionContext: options.executionContext,
-            context: options.context,
           }),
         ),
       })),
@@ -311,9 +308,7 @@ function connectionRequestsForClient(
 function toExecutorTool(input: {
   pluginId: string;
   haloTool: HaloTool;
-  authority: AgentAuthority;
   executionContext: AsyncLocalStorage<ToolExecutionContext>;
-  context: Pick<HaloToolContext, "workspaceRoot" | "userId">;
 }) {
   return tool({
     name: input.haloTool.name,
@@ -321,24 +316,23 @@ function toExecutorTool(input: {
     inputSchema: toExecutorSchema(input.haloTool.inputSchema),
     execute: (args) =>
       Effect.promise(async () => {
-        const authorization = await input.authority.authorize({
-          pluginId: input.pluginId,
-          toolName: input.haloTool.name,
-          requiredCapabilities: input.haloTool.requiredCapabilities,
-        });
-        if (authorization instanceof Error) return authorization;
         // SAFETY: ToolRuntime runs every Executor invocation inside executionContext.
         const context =
           input.executionContext.getStore() as ToolExecutionContext;
-        return await input.haloTool.execute(args, {
-          ...input.context,
-          ...context,
+        return await context.runtime.invoke({
+          pluginId: input.pluginId,
+          toolName: input.haloTool.name,
+          args,
+          signal: context.signal,
+          modelId: context.modelId,
+          threadId: context.threadId,
+          toolCallId: context.parentToolCallId,
         });
       }).pipe(
-        Effect.flatMap((result) =>
+        Effect.map((result) =>
           result instanceof Error
-            ? Effect.fail(result)
-            : Effect.succeed(result.value),
+            ? ToolResult.fail({ code: result.name, message: result.message })
+            : result.value,
         ),
       ),
   });
@@ -391,6 +385,7 @@ export class ToolRuntime {
   private readonly executionContext: AsyncLocalStorage<ToolExecutionContext>;
   private readonly toolPlugins: readonly HaloToolPlugin[];
   private readonly authority: AgentAuthority;
+  private readonly context: Pick<HaloToolContext, "workspaceRoot" | "userId">;
   private readonly connectionRequests: ReadonlyMap<string, ConnectionRequest>;
   private readonly integrationNames: ReadonlyMap<string, string>;
   private readonly googleWebOAuthClientSlug: OAuthClientSlug | undefined;
@@ -402,6 +397,7 @@ export class ToolRuntime {
     executionContext: AsyncLocalStorage<ToolExecutionContext>;
     toolPlugins: readonly HaloToolPlugin[];
     authority: AgentAuthority;
+    context: Pick<HaloToolContext, "workspaceRoot" | "userId">;
     connectionRequests: ReadonlyMap<string, ConnectionRequest>;
     integrationNames: ReadonlyMap<string, string>;
     googleWebOAuthClientSlug: OAuthClientSlug | undefined;
@@ -412,6 +408,7 @@ export class ToolRuntime {
     this.executionContext = input.executionContext;
     this.toolPlugins = input.toolPlugins;
     this.authority = input.authority;
+    this.context = input.context;
     this.connectionRequests = input.connectionRequests;
     this.integrationNames = input.integrationNames;
     this.googleWebOAuthClientSlug = input.googleWebOAuthClientSlug;
@@ -421,12 +418,41 @@ export class ToolRuntime {
     return toolIdentity(path, this.integrationNames);
   }
 
-  async authorize(input: {
+  async invoke<T = unknown>(input: {
     pluginId: string;
     toolName: string;
-    requiredCapabilities: readonly string[];
-  }) {
-    return await this.authority.authorize(input);
+    args: unknown;
+    signal?: AbortSignal;
+    modelId?: string;
+    threadId?: string;
+    toolCallId?: string;
+    bashOutput?: HaloToolContext["bashOutput"];
+  }): Promise<HaloToolExecution<T> | Error> {
+    const registered = this.toolPlugins
+      .find((plugin) => plugin.id === input.pluginId)
+      ?.tools.find((candidate) => candidate.name === input.toolName);
+    if (registered === undefined)
+      return new ToolRuntimeToolNotFoundError({
+        path: `${input.pluginId}.${input.toolName}`,
+      });
+    const denied = await this.authority.authorize({
+      pluginId: input.pluginId,
+      toolName: registered.name,
+      requiredCapabilities: registered.requiredCapabilities,
+    });
+    if (denied instanceof Error) return denied;
+    const result = await registered.execute(input.args, {
+      ...this.context,
+      runtime: this,
+      signal: input.signal,
+      modelId: input.modelId,
+      threadId: input.threadId,
+      toolCallId: input.toolCallId,
+      bashOutput: input.bashOutput,
+    });
+    if (result instanceof Error) return result;
+    // SAFETY: Typed host adapters name the registered plugin's output; dynamic callers retain unknown.
+    return result as HaloToolExecution<T>;
   }
 
   async getAgentDescription() {
@@ -455,6 +481,7 @@ export class ToolRuntime {
     signal?: AbortSignal;
     modelId?: string;
     parentToolCallId: string;
+    threadId?: string;
     onToolEvent?: (event: ExecActivityUpdate) => void;
   }) {
     const connectionRequests: ConnectionRequest[] = [];
@@ -464,6 +491,7 @@ export class ToolRuntime {
         modelId: input.modelId,
         runtime: this,
         parentToolCallId: input.parentToolCallId,
+        threadId: input.threadId,
         onToolEvent: input.onToolEvent,
       },
       async () =>
@@ -690,12 +718,7 @@ async function createToolRuntime(
       plugins: [
         haloToolsPlugin({
           plugins: input.toolPlugins,
-          authority: input.authority,
           executionContext,
-          context: {
-            workspaceRoot: input.workspaceRoot,
-            userId: input.userId,
-          },
         }),
         googleOpenApiPlugin,
       ] as const,
@@ -769,6 +792,7 @@ async function createToolRuntime(
     executionContext,
     toolPlugins: input.toolPlugins,
     authority: input.authority,
+    context: { workspaceRoot: input.workspaceRoot, userId: input.userId },
     connectionRequests: connectionRequestsForClient(
       oauthClients.desktop,
       installableGooglePresets,

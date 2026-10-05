@@ -4,7 +4,7 @@ import { RoutineRunner } from "../routines/RoutineRunner.js";
 import { RoutineScheduler } from "../routines/RoutineScheduler.js";
 import { createHotkeysPlugin } from "../hotkeys/createHotkeysPlugin.js";
 import path from "node:path";
-import { TursoSessionRepo } from "../storage/TursoSessionRepo.js";
+import { TursoThreadRepo } from "../storage/TursoThreadRepo.js";
 import { DatabaseClient } from "../storage/DatabaseClient.js";
 import { BrowserService } from "../browser/BrowserService.js";
 import type { Logger } from "@get-halo/logger";
@@ -12,7 +12,8 @@ import * as errore from "errore";
 import { FilesystemService } from "../filesystem/FilesystemService.js";
 import { ExtensionHost } from "../extensions/ExtensionHost.js";
 import type { ExtensionRuntime } from "../extensions/startExtension.js";
-import { SessionRegistry } from "../sessions/SessionRegistry.js";
+import { ThreadManager } from "../sessions/ThreadManager.js";
+import { createThreadPlugin } from "../sessions/createThreadPlugin.js";
 import { WorkspaceService } from "../workspace/WorkspaceService.js";
 import { WorkspaceSearch } from "../workspace/WorkspaceSearch.js";
 import { StaticAgentAuthority } from "../agent/runtime/AgentAuthority.js";
@@ -65,6 +66,8 @@ export type WorkspaceServerConfig = {
 export type WorkspaceServerHost = {
   // Inference client the host constructs and keeps for this process.
   llmApi: LLMApi;
+  // Host-granted tool capabilities; omitted uses the standard workspace grants.
+  agentCapabilities?: readonly string[];
   // Optional upload transport the host owns; the server submits completed traces through it.
   traceUploader?: TraceUploader;
   // Logger the host owns; the server writes through it and does not close the sinks.
@@ -84,9 +87,9 @@ export type WorkspaceServerOptions = {
 export class WorkspaceServer {
   private readonly filesystem: FilesystemService;
   private readonly database: DatabaseClient;
-  private readonly sessionRepo: TursoSessionRepo;
+  private readonly sessionRepo: TursoThreadRepo;
   private readonly workspace: WorkspaceService;
-  private readonly sessions: SessionRegistry;
+  private readonly sessions: ThreadManager;
   private readonly routineRunner: RoutineRunner;
   private readonly routineScheduler: RoutineScheduler;
   private readonly toolRuntime: ToolRuntime;
@@ -100,9 +103,9 @@ export class WorkspaceServer {
   private constructor(ctx: {
     filesystem: FilesystemService;
     database: DatabaseClient;
-    sessionRepo: TursoSessionRepo;
+    sessionRepo: TursoThreadRepo;
     workspace: WorkspaceService;
-    sessions: SessionRegistry;
+    sessions: ThreadManager;
     routineRunner: RoutineRunner;
     routineScheduler: RoutineScheduler;
     toolRuntime: ToolRuntime;
@@ -213,7 +216,7 @@ export class WorkspaceServer {
           error: closed,
         });
     });
-    const sessionRepo = new TursoSessionRepo(database);
+    const sessionRepo = new TursoThreadRepo(database);
     const search = new WorkspaceSearch({ workspace, repo: sessionRepo });
     cleanup.defer(async () => {
       const closed = await sessionRepo.close();
@@ -247,16 +250,24 @@ export class WorkspaceServer {
           createWorkspaceFilesPlugin(filesystem),
           createDatabaseQueryPlugin(database),
           createHotkeysPlugin(hotkeys),
+          createThreadPlugin(() => ({
+            threads: sessions,
+            connections: connectionService,
+          })),
           workspaceBashPlugin,
           parallelSearchPlugin,
         ],
-        authority: new StaticAgentAuthority([
-          "workspace.hotkeys",
-          "workspace.files.read",
-          "workspace.files.write",
-          "workspace.shell.execute",
-          "network.web.search",
-        ]),
+        authority: new StaticAgentAuthority(
+          host.agentCapabilities ?? [
+            "workspace.hotkeys",
+            "workspace.files.read",
+            "workspace.files.write",
+            "workspace.shell.execute",
+            "workspace.threads.read",
+            "workspace.threads.write",
+            "network.web.search",
+          ],
+        ),
       }),
     ]);
     if (!(toolRuntime instanceof Error))
@@ -271,6 +282,8 @@ export class WorkspaceServer {
     if (initialized instanceof Error) return initialized;
     if (toolRuntime instanceof Error) return toolRuntime;
 
+    const connectionService = new ConnectionService(toolRuntime);
+    cleanup.defer(() => connectionService.close());
     const extensions = new ExtensionHost({
       workspaceRoot,
       toolsOrigin: http.origin,
@@ -281,7 +294,7 @@ export class WorkspaceServer {
     cleanup.defer(async () => await extensions.stop());
     const browsers = new BrowserService();
     cleanup.defer(async () => await browsers.shutdown());
-    const sessions = new SessionRegistry({
+    const sessions = new ThreadManager({
       environment: config.environment,
       repo: sessionRepo,
       llmApi: host.llmApi,
@@ -315,8 +328,6 @@ export class WorkspaceServer {
       logger: host.logger,
     });
     cleanup.defer(async () => await routineScheduler.stop());
-    const connectionService = new ConnectionService(toolRuntime);
-    cleanup.defer(() => connectionService.close());
     const requests = serveHaloHttp({
       ...http,
       context: {
