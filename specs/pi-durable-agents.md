@@ -684,6 +684,8 @@ Combined verification: affected checks passed all 52 tasks; the full workspace-s
 
 In the live Electron app, real cloud inference called thread.new → prompt → wait → snapshot and reported the other thread's exact reply, `copper kestrel`. The model initially omitted submissionId from wait, received the schema error, and successfully retried with the accepted ID. No parent/child metadata or access restriction was used.
 
+PR review follow-up: thread event acquisition failures now travel as error values to the streaming RPC adapter, which maps them to BAD_REQUEST during iteration. The missing-thread regression failed with INTERNAL_SERVER_ERROR before the fix and passes afterward. The closed-thread stream and idle-unload/reopen tests also pass, along with all 52 affected checks. The reported storage-close leak was not present: Pi 1.0 Harness.close delegates to SessionImpl.close, which closes the supplied storage; Turso's onClose releases the repository reservation. No duplicate storage close was added. The full server/UI runs above preceded this focused review fix.
+
 ## Delivery boundaries
 
 PR #358 landed phase 1. This branch contains phases 2–6 for review against main. A ✅ marks implementation completion, not deployment or a fully green test suite; the verification limitations above still apply. For completed phases, **Today** describes the starting point before that phase and **Proposed** describes the implemented change. No phase requires a new compatibility layer.

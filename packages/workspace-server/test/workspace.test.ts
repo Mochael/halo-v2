@@ -555,6 +555,24 @@ serverTest(
 );
 
 serverTest(
+  "reports missing event threads as BAD_REQUEST",
+  async ({ server }) => {
+    const consume = async () => {
+      const events = await server.rpc.thread.events({
+        sessionId: "missing-thread",
+      });
+      for await (const event of events) {
+        throw new Error(`A missing thread emitted ${event.type}`);
+      }
+    };
+    await expect(consume()).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "Session 'missing-thread' does not exist.",
+    });
+  },
+);
+
+serverTest(
   "reads closed pending work without resuming it until a live stream is opened",
   async ({ server, llm }) => {
     const session = await server.rpc.thread.new();

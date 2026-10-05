@@ -59,14 +59,16 @@ export const threadRouter = os.router({
     if (snapshot instanceof Error) return orpcErrors.badRequest(snapshot);
     return snapshot;
   }),
-  events: os.events.handler(async ({ input, context, signal }) => {
-    const events = await context.sessions.events(input.sessionId, {
+  events: os.events.handler(async function* ({ input, context, signal }) {
+    const events = context.sessions.events(input.sessionId, {
       signal,
       readConnections: () =>
         context.connections.statesForSession(input.sessionId),
     });
-    if (events instanceof Error) return orpcErrors.badRequest(events);
-    return events;
+    for await (const event of events) {
+      if (event instanceof Error) throw orpcErrors.badRequest(event);
+      yield event;
+    }
   }),
   prompt: os.prompt.handler(async ({ input, context, signal }) => {
     context.logger.info({

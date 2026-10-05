@@ -231,7 +231,10 @@ export class ThreadManager {
     const acquired = await this.track(
       async () => await this.acquire(sessionId),
     );
-    if (acquired instanceof Error) throw acquired;
+    if (acquired instanceof Error) {
+      yield acquired;
+      return;
+    }
     using cleanup = new errore.DisposableStack();
     cleanup.use(acquired.lease);
     yield* acquired.thread.watch(options);
