@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { Stream } from "@get-halo/shared/Stream";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import {
@@ -61,6 +62,7 @@ import * as errore from "errore";
 import type {
   ConnectionRequest,
   OAuthCompletion,
+  ToolApproval,
   ToolIdentity,
 } from "@get-halo/client";
 import { createExecutorDatabase } from "./createExecutorDatabase.js";
@@ -90,25 +92,30 @@ export class ToolRuntimeToolNotFoundError extends errore.createTaggedError({
   message: 'Tool "$path" was not found',
 }) {}
 
-export class ConnectionRequiredError extends errore.createTaggedError({
-  name: "ConnectionRequiredError",
+export class ToolInputRequiredError extends errore.createTaggedError({
+  name: "ToolInputRequiredError",
   message:
-    "A connection is required before this code can run. A connection card has been shown to the user. Tell them to use it to connect their account. You will be notified once they've finished connecting.",
+    "Some operations need user input before they can run. Cards have been shown for all requested connections and approvals. Tell the user to respond to those cards. You will be notified after they respond.",
 }) {
   readonly connectionRequests: ConnectionRequest[];
+  readonly approvals: ToolApproval[];
 
   constructor(input: {
     connectionRequests: ConnectionRequest[];
+    approvals: ToolApproval[];
     cause: Error | undefined;
   }) {
     super({ cause: input.cause });
     this.connectionRequests = input.connectionRequests;
+    this.approvals = input.approvals;
   }
 }
 
 type HaloToolsPluginOptions = {
   plugins: readonly HaloToolPlugin[];
   executionContext: AsyncLocalStorage<ToolExecutionContext>;
+  connectionRequests: ReadonlyMap<string, ConnectionRequest>;
+  integrationsEnabled: boolean;
 };
 
 const showConnectionCardInputSchema = Type.Object({
@@ -140,6 +147,7 @@ type ToolExecutionContext = Pick<
 > & {
   parentToolCallId?: string;
   onToolEvent?: (event: ExecActivityUpdate) => void;
+  onConnectionRequest?: (request: ConnectionRequest) => void;
 };
 
 const haloToolsPlugin = definePlugin((options?: HaloToolsPluginOptions) => {
@@ -160,12 +168,33 @@ const haloToolsPlugin = definePlugin((options?: HaloToolsPluginOptions) => {
             description:
               "Show the user a card where they can choose whether to connect an integration. This does not connect an account or grant access by itself. Use it proactively when the task needs an integration that has no connection; do not ask for confirmation first.",
             inputSchema: toExecutorSchema(showConnectionCardInputSchema),
-            annotations: {
-              requiresApproval: true,
-              approvalDescription:
-                "Show an optional integration connection card",
-            },
-            execute: () => Effect.succeed(undefined),
+            execute: (args) =>
+              Effect.sync(() => {
+                if (!Value.Check(showConnectionCardInputSchema, args))
+                  return ToolResult.fail({
+                    code: "invalid_tool_arguments",
+                    message: "Expected an integration id",
+                  });
+                const request = options.connectionRequests.get(
+                  args.integration,
+                );
+                if (request === undefined)
+                  return ToolResult.fail({
+                    code: "integration_unavailable",
+                    message: options.integrationsEnabled
+                      ? `Integration '${args.integration}' is not configured for connections in this workspace. No connection card was shown.`
+                      : "Integrations are disabled in this workspace until they move to the control plane. No connection card was shown; approval or reconnecting cannot enable them.",
+                  });
+                const context = options.executionContext.getStore();
+                if (context?.onConnectionRequest === undefined)
+                  return ToolResult.fail({
+                    code: "connection_card_context_required",
+                    message:
+                      "Connection cards must be requested from a thread's exec tool",
+                  });
+                context.onConnectionRequest(request);
+                return ToolResult.ok({ status: "shown" });
+              }),
           }),
         ],
       },
@@ -259,7 +288,6 @@ function configuredOAuthClients(input: {
 }
 
 const oauthStartAddress = "executor.coreTools.oauth.start";
-const showConnectionCardAddress = "halo.showConnectionCard";
 const oauthStartInputSchema = Type.Object({
   client: Type.String(),
   clientOwner: Type.Union([Type.Literal("org"), Type.Literal("user")]),
@@ -351,6 +379,15 @@ function toExecutorSchema(schema: TObject) {
         return {
           issues: [...Value.Errors(schema, value)].map((issue) => ({
             message: issue.message,
+            path:
+              issue.path === ""
+                ? []
+                : issue.path
+                    .slice(1)
+                    .split("/")
+                    .map((part) =>
+                      part.replaceAll("~1", "/").replaceAll("~0", "~"),
+                    ),
           })),
         };
       },
@@ -366,7 +403,8 @@ type ToolRuntimeOptions = {
   database: DatabaseClient;
   workspaceRoot: string;
   userId: string;
-  credentialVault: CredentialVault;
+  integrationsEnabled?: boolean;
+  credentialVault?: CredentialVault;
   toolPlugins: readonly HaloToolPlugin[];
   authority: AgentAuthority;
   oauthRedirectUri: string;
@@ -375,6 +413,18 @@ type ToolRuntimeOptions = {
 };
 
 export class ToolRuntime {
+  private readonly executionChanges = new Stream<number>();
+  private readonly executions = this.executionChanges.project(
+    0,
+    (count, delta) => count + delta,
+  );
+  readonly idle = this.executions.map((count) => count === 0);
+
+  private retainExecution(): Disposable {
+    this.executionChanges.append(1);
+    return { [Symbol.dispose]: () => this.executionChanges.append(-1) };
+  }
+
   static async create(input: ToolRuntimeOptions) {
     return await createToolRuntime(input);
   }
@@ -386,7 +436,6 @@ export class ToolRuntime {
   private readonly toolPlugins: readonly HaloToolPlugin[];
   private readonly authority: AgentAuthority;
   private readonly context: Pick<HaloToolContext, "workspaceRoot" | "userId">;
-  private readonly connectionRequests: ReadonlyMap<string, ConnectionRequest>;
   private readonly integrationNames: ReadonlyMap<string, string>;
   private readonly googleWebOAuthClientSlug: OAuthClientSlug | undefined;
 
@@ -398,7 +447,6 @@ export class ToolRuntime {
     toolPlugins: readonly HaloToolPlugin[];
     authority: AgentAuthority;
     context: Pick<HaloToolContext, "workspaceRoot" | "userId">;
-    connectionRequests: ReadonlyMap<string, ConnectionRequest>;
     integrationNames: ReadonlyMap<string, string>;
     googleWebOAuthClientSlug: OAuthClientSlug | undefined;
   }) {
@@ -409,7 +457,6 @@ export class ToolRuntime {
     this.toolPlugins = input.toolPlugins;
     this.authority = input.authority;
     this.context = input.context;
-    this.connectionRequests = input.connectionRequests;
     this.integrationNames = input.integrationNames;
     this.googleWebOAuthClientSlug = input.googleWebOAuthClientSlug;
   }
@@ -428,6 +475,8 @@ export class ToolRuntime {
     toolCallId?: string;
     bashOutput?: HaloToolContext["bashOutput"];
   }): Promise<HaloToolExecution<T> | Error> {
+    using cleanup = new errore.DisposableStack();
+    cleanup.use(this.retainExecution());
     const registered = this.toolPlugins
       .find((plugin) => plugin.id === input.pluginId)
       ?.tools.find((candidate) => candidate.name === input.toolName);
@@ -483,8 +532,15 @@ export class ToolRuntime {
     parentToolCallId: string;
     threadId?: string;
     onToolEvent?: (event: ExecActivityUpdate) => void;
+    consumeApproval: (input: {
+      toolPath: string;
+      arguments: unknown;
+    }) => boolean;
   }) {
+    using cleanup = new errore.DisposableStack();
+    cleanup.use(this.retainExecution());
     const connectionRequests: ConnectionRequest[] = [];
+    const approvalRequests: ToolApproval[] = [];
     const execution = await this.executionContext.run(
       {
         signal: input.signal,
@@ -493,19 +549,34 @@ export class ToolRuntime {
         parentToolCallId: input.parentToolCallId,
         threadId: input.threadId,
         onToolEvent: input.onToolEvent,
+        onConnectionRequest: (request) => connectionRequests.push(request),
       },
       async () =>
         await Effect.runPromise(
           this.engine.execute(input.code, {
             onElicitation: (context) => {
-              const connection = connectionInput(
-                context,
-                this.connectionRequests,
-              );
+              const connection = connectionInput(context);
               if (connection !== undefined) {
                 connectionRequests.push(connection);
+                return Effect.succeed({ action: "decline" as const });
               }
-              return Effect.succeed({ action: "decline" });
+              const toolPath = sandboxPath(String(context.address));
+              if (
+                input.consumeApproval({
+                  toolPath,
+                  arguments: context.args,
+                })
+              ) {
+                return Effect.succeed({ action: "accept" as const });
+              }
+              approvalRequests.push({
+                id: randomUUID(),
+                toolPath,
+                message: context.request.message.split("\n", 1).join(),
+                arguments: context.args,
+                status: "pending",
+              });
+              return Effect.succeed({ action: "decline" as const });
             },
           }),
         ).catch(
@@ -516,8 +587,12 @@ export class ToolRuntime {
     if (execution instanceof Error) return execution;
     const cause =
       execution.error === undefined ? undefined : new Error(execution.error);
-    if (connectionRequests.length > 0) {
-      return new ConnectionRequiredError({ connectionRequests, cause });
+    if (connectionRequests.length > 0 || approvalRequests.length > 0) {
+      return new ToolInputRequiredError({
+        connectionRequests,
+        approvals: approvalRequests,
+        cause,
+      });
     }
     return execution;
   }
@@ -528,6 +603,8 @@ export class ToolRuntime {
     signal?: AbortSignal;
     modelId?: string;
   }) {
+    using cleanup = new errore.DisposableStack();
+    cleanup.use(this.retainExecution());
     const invocation = await this.executionContext.run(
       { signal: input.signal, modelId: input.modelId, runtime: this },
       async () =>
@@ -557,6 +634,8 @@ export class ToolRuntime {
     args: unknown;
     signal?: AbortSignal;
   }): Promise<ToolResult<unknown> | ToolRuntimeError> {
+    using cleanup = new errore.DisposableStack();
+    cleanup.use(this.retainExecution());
     const result = await this.executionContext.run(
       { signal: input.signal, modelId: undefined, runtime: this },
       async () =>
@@ -692,12 +771,18 @@ export class ToolRuntime {
 async function createToolRuntime(
   input: ToolRuntimeOptions,
 ): Promise<ToolRuntime | ToolRuntimeError> {
+  const integrationsEnabled = input.integrationsEnabled !== false;
+  if (integrationsEnabled && input.credentialVault === undefined)
+    return new ToolRuntimeError({
+      operation: "missing integration credential vault",
+    });
   const oauthClients = configuredOAuthClients({
     googleWebOAuthClient: input.googleWebOAuthClient,
     oauthTestOrigin: input.oauthTestOrigin,
   });
-  const firstPartyOAuthClients =
-    oauthClients.web === undefined
+  const firstPartyOAuthClients = !integrationsEnabled
+    ? []
+    : oauthClients.web === undefined
       ? [oauthClients.desktop]
       : [oauthClients.desktop, oauthClients.web];
   if (quickJsModulePromise === undefined) {
@@ -711,6 +796,12 @@ async function createToolRuntime(
   setQuickJSModule(quickJsModule);
 
   const executionContext = new AsyncLocalStorage<ToolExecutionContext>();
+  const connectionRequests = integrationsEnabled
+    ? connectionRequestsForClient(
+        oauthClients.desktop,
+        installableGooglePresets,
+      )
+    : new Map<string, ConnectionRequest>();
   const executor = await Effect.runPromise(
     createExecutor({
       tenant: Tenant.make(input.workspaceRoot),
@@ -719,11 +810,16 @@ async function createToolRuntime(
         haloToolsPlugin({
           plugins: input.toolPlugins,
           executionContext,
+          connectionRequests,
+          integrationsEnabled,
         }),
-        googleOpenApiPlugin,
+        ...(integrationsEnabled ? [googleOpenApiPlugin] : []),
       ] as const,
-      providers: [createExecutorCredentialProvider(input.credentialVault)],
-      coreTools: { includeProviders: true },
+      providers:
+        integrationsEnabled && input.credentialVault !== undefined
+          ? [createExecutorCredentialProvider(input.credentialVault)]
+          : [],
+      coreTools: integrationsEnabled ? { includeProviders: true } : undefined,
       redirectUri: input.oauthRedirectUri,
       firstPartyOAuthClients,
       db: ({ tables }) =>
@@ -756,7 +852,9 @@ async function createToolRuntime(
       console.warn("Failed to close Executor after startup failure:", closed);
   });
 
-  const installed = await installGooglePresets(executor);
+  const installed = integrationsEnabled
+    ? await installGooglePresets(executor)
+    : undefined;
   if (installed instanceof Error) return installed;
 
   const integrations = await Effect.runPromise(
@@ -793,10 +891,6 @@ async function createToolRuntime(
     toolPlugins: input.toolPlugins,
     authority: input.authority,
     context: { workspaceRoot: input.workspaceRoot, userId: input.userId },
-    connectionRequests: connectionRequestsForClient(
-      oauthClients.desktop,
-      installableGooglePresets,
-    ),
     integrationNames,
     googleWebOAuthClientSlug:
       oauthClients.web === undefined
@@ -893,14 +987,7 @@ function sandboxPath(address: string) {
 
 function connectionInput(
   context: ElicitationContext,
-  connectionRequests: ReadonlyMap<string, ConnectionRequest>,
 ): ConnectionRequest | undefined {
-  if (context.address === showConnectionCardAddress) {
-    if (!Value.Check(showConnectionCardInputSchema, context.args)) {
-      return undefined;
-    }
-    return connectionRequests.get(context.args.integration);
-  }
   if (context.address !== oauthStartAddress) return undefined;
   if (!Value.Check(oauthStartInputSchema, context.args)) return undefined;
   const args: Static<typeof oauthStartInputSchema> = context.args;

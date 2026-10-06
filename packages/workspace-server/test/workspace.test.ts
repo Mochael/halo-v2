@@ -18,7 +18,6 @@ import fs from "node:fs/promises";
 import nodeHttp from "node:http";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
-import { IdTokenClient } from "google-auth-library";
 import { ControlPlaneTraceUploader } from "@get-halo/workspace-server";
 import { assert, expect, vi } from "vitest";
 import { contentText } from "@earendil-works/pi-ai";
@@ -213,23 +212,10 @@ serverTest(
 serverTest(
   "uploads archives through the control plane and retries rejected requests after restart",
   async ({ createServer, http }) => {
-    const token = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
+    const token = "workspace-test-runtime-token";
     const uploader = new ControlPlaneTraceUploader({
       origin: http.url(""),
-      auth: {
-        async getIdTokenClient(audience) {
-          expect(audience).toBe(http.url("/api/traces"));
-          return new IdTokenClient({
-            targetAudience: audience,
-            idTokenProvider: {
-              async fetchIdToken(target) {
-                expect(target).toBe(audience);
-                return token;
-              },
-            },
-          });
-        },
-      },
+      token,
     });
     const workspaceId = "11111111-1111-4111-8111-111111111111";
     const server = createServer({
@@ -1203,6 +1189,79 @@ serverTest(
         "delta\ngamma\ndelta\n",
       );
     }
+  },
+);
+
+serverTest(
+  "preserves invalid tool argument paths in model-visible exec results",
+  async ({ server, llm }) => {
+    const session = await server.rpc.thread.new();
+    const prompt = server.promptAndWait({
+      ...session,
+      text: "Search the web",
+    });
+    await llm.respond(
+      m.tool.start("exec", {
+        id: "invalid-search",
+        arguments: {
+          js: `return await tools.web.search({ query: "wheresryan22 github open source" });`,
+        },
+      }),
+    );
+    await llm.respond(({ messages }) => {
+      const output = messageText(
+        messages.find(
+          (message) =>
+            message.role === "tool" &&
+            message.tool_call_id === "invalid-search",
+        )!,
+      );
+      expect(JSON.parse(output)).toMatchObject({
+        ok: false,
+        error: {
+          code: "invalid_tool_arguments",
+          details: {
+            issues: expect.arrayContaining([
+              { message: "Expected required property", path: ["objective"] },
+              {
+                message: "Expected required property",
+                path: ["search_queries"],
+              },
+              { message: "Expected string", path: ["objective"] },
+              { message: "Expected array", path: ["search_queries"] },
+            ]),
+          },
+        },
+      });
+      return m.tool.start("exec", {
+        id: "invalid-search-query",
+        arguments: {
+          js: `return await tools.web.search({ objective: "Find projects", search_queries: ["valid query", 42] });`,
+        },
+      });
+    });
+    await llm.respond(({ messages }) => {
+      const output = messageText(
+        messages.find(
+          (message) =>
+            message.role === "tool" &&
+            message.tool_call_id === "invalid-search-query",
+        )!,
+      );
+      expect(JSON.parse(output)).toMatchObject({
+        ok: false,
+        error: {
+          code: "invalid_tool_arguments",
+          details: {
+            issues: [
+              { message: "Expected string", path: ["search_queries", "1"] },
+            ],
+          },
+        },
+      });
+      return m.assistant("The invalid fields are identified.");
+    });
+    await prompt;
   },
 );
 
@@ -2195,6 +2254,373 @@ serverTest(
       return m.assistant("Done.");
     });
     await prompt;
+  },
+);
+
+serverTest(
+  "preserves every connection and approval requested by one exec",
+  async ({ server, llm }) => {
+    const session = await server.rpc.thread.new();
+    const prompting = server.promptAndWait({
+      ...session,
+      text: "Connect Drive and Gmail and create two policies",
+    });
+    await llm.respond(
+      m.tool.start("exec", {
+        id: "mixed-requests",
+        arguments: {
+          js: `return await Promise.allSettled([
+        tools.halo.showConnectionCard({ integration: "google_drive" }),
+        tools.executor.coreTools.policies.create({ owner: "user", pattern: "mixed-first.*", action: "block" }),
+        tools.halo.showConnectionCard({ integration: "google_gmail" }),
+        tools.executor.coreTools.policies.create({ owner: "user", pattern: "mixed-second.*", action: "block" })
+      ]);`,
+        },
+      }),
+    );
+    await llm.respond(
+      m.assistant("Please respond to the connection and approval cards."),
+    );
+    await prompting;
+    const snapshot = await server.rpc.thread.snapshot(session);
+    const executions = sessionToolExecutions(snapshot);
+    expect(executions).toHaveLength(1);
+    const execution = executions[0]!;
+    assert(execution.type === "exec");
+    expect(execution.approvals).toHaveLength(2);
+    expect(execution.approvals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolPath: "executor.coreTools.policies.create",
+          status: "pending",
+          arguments: {
+            owner: "user",
+            pattern: "mixed-first.*",
+            action: "block",
+          },
+        }),
+        expect.objectContaining({
+          toolPath: "executor.coreTools.policies.create",
+          status: "pending",
+          arguments: {
+            owner: "user",
+            pattern: "mixed-second.*",
+            action: "block",
+          },
+        }),
+      ]),
+    );
+    expect(execution.result?.details).toMatchObject({
+      connectionRequests: [
+        expect.objectContaining({ integration: "google_drive" }),
+        expect.objectContaining({ integration: "google_gmail" }),
+      ],
+    });
+    await server.rpc.thread.close(session);
+    expect(
+      sessionToolExecutions(await server.rpc.thread.snapshot(session)),
+    ).toEqual(executions);
+  },
+);
+
+serverTest(
+  "reports unavailable connection cards after reopening a workspace with integrations disabled",
+  async ({ createServer, llm }) => {
+    const local = createServer();
+    await local.start();
+    const session = await local.rpc.thread.new();
+    const requesting = local.promptAndWait({
+      ...session,
+      text: "Show the Gmail card",
+    });
+    const js =
+      'return await tools.halo.showConnectionCard({ integration: "google_gmail" });';
+    await llm.respond(
+      m.tool.start("exec", {
+        id: "local-connection-card",
+        arguments: { js },
+      }),
+    );
+    await llm.respond(m.assistant("The Gmail card is ready."));
+    await requesting;
+    const before = sessionToolExecutions(
+      await local.rpc.thread.snapshot(session),
+    );
+    expect(before).toMatchObject([
+      {
+        approvals: [],
+        result: {
+          details: { connectionRequests: [{ integration: "google_gmail" }] },
+        },
+      },
+    ]);
+    await local.stop();
+
+    // Exe reuses the saved database but leaves integrations disabled until their control-plane migration.
+    const hosted = createServer({
+      workspaceRoot: local.workspaceRoot,
+      integrationsEnabled: false,
+    });
+    await hosted.start();
+    const retrying = hosted.promptAndWait({
+      ...session,
+      text: "Show the Gmail card again",
+    });
+    await llm.respond(
+      m.tool.start("exec", {
+        id: "hosted-connection-card",
+        arguments: { js },
+      }),
+    );
+    await llm.respond(({ messages }) => {
+      const output = messageText(
+        messages.findLast((item) => item.role === "tool")!,
+      );
+      expect(output).toContain("integration_unavailable");
+      expect(output).toContain("Integrations are disabled");
+      expect(output).toContain("No connection card was shown");
+      return m.assistant(
+        "Gmail is unavailable here; approving or reconnecting will not enable it.",
+      );
+    });
+    await retrying;
+    const after = sessionToolExecutions(
+      await hosted.rpc.thread.snapshot(session),
+    );
+    expect(after).toHaveLength(2);
+    expect(after[0]).toEqual(before[0]);
+    expect(after[1]).toMatchObject({
+      approvals: [],
+      calls: [{ tool: { path: "halo.showConnectionCard" }, status: "failed" }],
+    });
+    expect(after[1]?.result?.details).not.toHaveProperty("connectionRequests");
+  },
+);
+
+serverTest(
+  "finishes approval requests and retries only after a thread response",
+  async ({ server, llm }) => {
+    for (const decision of ["allow", "deny"] as const) {
+      const session = await server.rpc.thread.new();
+      const prompting = server.promptAndWait({
+        ...session,
+        text: `${decision} the policy`,
+      });
+      const js = `return await tools.executor.coreTools.policies.create({ owner: "user", pattern: "approval-test-${decision}.*", action: "block" });`;
+      await llm.respond(
+        m.tool.start("exec", {
+          id: `approval-request-${decision}`,
+          arguments: { js },
+        }),
+      );
+      await llm.respond(m.assistant(`Waiting for ${decision}`));
+      await prompting;
+      const pending = await server.rpc.thread.snapshot(session);
+      expect(pending.activeRun).toBeUndefined();
+      const approval = sessionToolExecutions(pending).flatMap((execution) =>
+        execution.type === "exec" ? execution.approvals : [],
+      )[0]!;
+      expect(approval.status).toBe("pending");
+
+      await server.rpc.thread.respondToToolApproval({
+        ...session,
+        approvalId: approval.id,
+        decision,
+      });
+      if (decision === "allow") {
+        await llm.respond(
+          m.tool.start("exec", {
+            id: "approval-retry-allow",
+            arguments: { js },
+          }),
+        );
+      }
+      await llm.respond(m.assistant(`${decision} finished`));
+
+      await expect
+        .poll(async () => {
+          const snapshot = await server.rpc.thread.snapshot(session);
+          return {
+            activeRun: snapshot.activeRun,
+            executions: sessionToolExecutions(snapshot),
+          };
+        })
+        .toMatchObject({
+          activeRun: undefined,
+          executions:
+            decision === "allow"
+              ? [
+                  {
+                    approvals: [{ id: approval.id, status: "allowed" }],
+                  },
+                  { id: "approval-retry-allow", status: "completed" },
+                ]
+              : [
+                  {
+                    approvals: [{ id: approval.id, status: "denied" }],
+                  },
+                ],
+        });
+      const completed = await server.rpc.thread.snapshot(session);
+      const executions = sessionToolExecutions(completed);
+      expect(executions[0]).toMatchObject({
+        type: "exec",
+        status: "completed",
+        approvals: [
+          {
+            id: approval.id,
+            status: decision === "allow" ? "allowed" : "denied",
+          },
+        ],
+      });
+      expect(executions).toHaveLength(decision === "allow" ? 2 : 1);
+      if (decision === "allow") {
+        expect(executions[1]).toMatchObject({
+          id: "approval-retry-allow",
+          status: "completed",
+          approvals: [],
+        });
+      }
+      await server.rpc.thread.close(session);
+      const restored = await server.rpc.thread.snapshot(session);
+      expect(sessionToolExecutions(restored)).toEqual(executions);
+      await expect(
+        server.rpc.thread.respondToToolApproval({
+          ...session,
+          approvalId: approval.id,
+          decision,
+        }),
+      ).rejects.toThrow("no longer pending");
+    }
+  },
+);
+
+serverTest(
+  "keeps approval decisions when a busy continuation is aborted",
+  async ({ server, llm }) => {
+    for (const decision of ["allow", "deny"] as const) {
+      const session = await server.rpc.thread.new();
+      const prompting = server.promptAndWait({
+        ...session,
+        text: "Create a policy",
+      });
+      await llm.respond(
+        m.tool.start("exec", {
+          id: `pending-${decision}`,
+          arguments: {
+            js: `return await tools.executor.coreTools.policies.create({ owner: "user", pattern: "abort-${decision}.*", action: "block" });`,
+          },
+        }),
+      );
+      await llm.respond(m.assistant("Please respond to the approval card."));
+      await prompting;
+      const snapshot = await server.rpc.thread.snapshot(session);
+      const approval = sessionToolExecutions(snapshot).flatMap((execution) =>
+        execution.type === "exec" ? execution.approvals : [],
+      )[0]!;
+      const busy = await server.rpc.thread.prompt({
+        ...session,
+        text: "Work on something else",
+      });
+      await llm.waitForRequest();
+      await server.rpc.thread.respondToToolApproval({
+        ...session,
+        approvalId: approval.id,
+        decision,
+      });
+      await server.rpc.thread.abort(session);
+      await server.rpc.thread.wait({
+        ...session,
+        submissionId: busy.submissionId,
+      });
+      const stopped = await server.rpc.thread.snapshot(session);
+      expect(sessionToolExecutions(stopped)[0]).toMatchObject({
+        approvals: [
+          {
+            id: approval.id,
+            status: decision === "allow" ? "allowed" : "denied",
+          },
+        ],
+      });
+      await server.rpc.thread.close(session);
+      const restored = await server.rpc.thread.snapshot(session);
+      expect(sessionToolExecutions(restored)).toEqual(
+        sessionToolExecutions(stopped),
+      );
+      await expect(
+        server.rpc.thread.respondToToolApproval({
+          ...session,
+          approvalId: approval.id,
+          decision,
+        }),
+      ).rejects.toThrow("no longer pending");
+    }
+  },
+);
+
+serverTest(
+  "requires another approval when retry arguments change",
+  async ({ server, llm }) => {
+    const session = await server.rpc.thread.new();
+    const originalJs =
+      'return await tools.executor.coreTools.policies.create({ owner: "user", pattern: "approval-original.*", action: "block" });';
+    const prompting = server.promptAndWait({
+      ...session,
+      text: "Create the policy",
+    });
+    await llm.respond(
+      m.tool.start("exec", {
+        id: "approval-original",
+        arguments: { js: originalJs },
+      }),
+    );
+    await llm.respond(m.assistant("Waiting for approval"));
+    await prompting;
+    const pending = await server.rpc.thread.snapshot(session);
+    const originalApproval = sessionToolExecutions(pending).flatMap(
+      (execution) => (execution.type === "exec" ? execution.approvals : []),
+    )[0]!;
+
+    await server.rpc.thread.respondToToolApproval({
+      ...session,
+      approvalId: originalApproval.id,
+      decision: "allow",
+    });
+    const changedJs =
+      'return await tools.executor.coreTools.policies.create({ owner: "user", pattern: "approval-changed.*", action: "block" });';
+    await llm.respond(
+      m.tool.start("exec", {
+        id: "approval-changed",
+        arguments: { js: changedJs },
+      }),
+    );
+    await llm.respond(m.assistant("The changed request needs approval"));
+
+    await expect
+      .poll(async () => {
+        const snapshot = await server.rpc.thread.snapshot(session);
+        return {
+          activeRun: snapshot.activeRun,
+          approvals: sessionToolExecutions(snapshot).flatMap((execution) =>
+            execution.type === "exec" ? execution.approvals : [],
+          ),
+        };
+      })
+      .toMatchObject({
+        activeRun: undefined,
+        approvals: [
+          { id: originalApproval.id, status: "allowed" },
+          { status: "pending", arguments: { pattern: "approval-changed.*" } },
+        ],
+      });
+    const completed = await server.rpc.thread.snapshot(session);
+    const approvals = sessionToolExecutions(completed).flatMap((execution) =>
+      execution.type === "exec" ? execution.approvals : [],
+    );
+    expect(approvals).toMatchObject([
+      { id: originalApproval.id, status: "allowed" },
+      { status: "pending", arguments: { pattern: "approval-changed.*" } },
+    ]);
   },
 );
 
